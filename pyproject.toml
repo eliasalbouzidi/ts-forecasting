@@ -34,7 +34,7 @@ dependencies = [
     "tensorboardx==2.6.2",
     "pyarrow==11.0.0",
     "protobuf>=3.19",
-    "jsonargparse==4.27.1,
+    "jsonargparse==4.27.1",
     "opt_einsum",
     "psutil",
     "reformer-pytorch",
