@@ -6,7 +6,7 @@ from probts.model.forecast_module import ProbTSForecastModule
 from probts.callbacks import MemoryCallback, TimeCallback
 from probts.utils import find_best_epoch
 from lightning.pytorch.cli import LightningCLI
-from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger,WandbLogger
+from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from probts.utils.save_utils import save_exp_summary, save_csv
 
@@ -159,7 +159,7 @@ class ProbTSCli(LightningCLI):
             save_dir=f'{self.save_dict}/logs',
         )
     
-        self.trainer.logger = [tb_logger, self.wandb_logger]
+        self.trainer.loggers = [tb_logger, self.wandb_logger]
     
     def set_test_mode(self):
         csv_logger = CSVLogger(
@@ -169,9 +169,9 @@ class ProbTSCli(LightningCLI):
         )
     
         if hasattr(self, "wandb_logger"):
-            self.trainer.logger = [csv_logger, self.wandb_logger]
+            self.trainer.loggers = [csv_logger, self.wandb_logger]
         else:
-            self.trainer.logger = csv_logger
+            self.trainer.loggers = csv_logger
 
 
         if not self.model.forecaster.no_training:
