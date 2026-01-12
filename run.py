@@ -6,7 +6,7 @@ from probts.model.forecast_module import ProbTSForecastModule
 from probts.callbacks import MemoryCallback, TimeCallback
 from probts.utils import find_best_epoch
 from lightning.pytorch.cli import LightningCLI
-from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
+from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger,WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from probts.utils.save_utils import save_exp_summary, save_csv
 
@@ -147,18 +147,32 @@ class ProbTSCli(LightningCLI):
                 self.model_summary_callback = c
 
     def set_fit_mode(self):
-        self.trainer.logger = TensorBoardLogger(
+        tb_logger = TensorBoardLogger(
             save_dir=f'{self.save_dict}/logs',
             name=self.tag,
             version='fit'
         )
     
+        self.wandb_logger = WandbLogger(
+            project="probts",
+            name=self.tag,
+            save_dir=f'{self.save_dict}/logs',
+        )
+    
+        self.trainer.logger = [tb_logger, self.wandb_logger]
+    
     def set_test_mode(self):
-        self.trainer.logger = CSVLogger(
+        csv_logger = CSVLogger(
             save_dir=f'{self.save_dict}/logs',
             name=self.tag,
             version='test'
         )
+    
+        if hasattr(self, "wandb_logger"):
+            self.trainer.logger = [csv_logger, self.wandb_logger]
+        else:
+            self.trainer.logger = csv_logger
+
 
         if not self.model.forecaster.no_training:
             self.ckpt = self.checkpoint_callback.best_model_path
