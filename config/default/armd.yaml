@@ -1,0 +1,43 @@
+# lightning==2.3.0.dev0
+seed_everything: 1
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 2
+  use_distributed_sampler: false
+  limit_train_batches: 100
+  log_every_n_steps: 1
+  default_root_dir: ./results
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.ARMD
+    init_args:
+      # --- ARMD Specific Parameters ---
+      loss_type: l1               # Paper explicitly uses L1 loss 
+      beta_schedule: cosine       # Cosine schedule is standard for this implementation
+      sampling_timesteps: 12      # Paper suggests small steps (e.g., 12) for fast inference 
+      w_grad: true                # Enable learnable weighting in the backbone
+      
+      # --- General Model Args ---
+      use_scaling: true           # Critical for diffusion-based models
+      
+      # ARMD uses a linear backbone that processes the whole sequence,
+      # so it typically doesn't need explicit lags or feature embeddings 
+      # like the RNN in TimeGrad does.
+      use_lags: false             
+      use_feat_idx_emb: false     
+      use_time_feat: false        
+
+  learning_rate: 0.001            # Paper uses 1e-3 
+  quantiles_num: 20
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: solar_nips
+      scaler: identity            
+      split_val: true
+  batch_size: 128                 # Paper suggests batch size 128 
+  test_batch_size: 64
+  num_workers: 8
