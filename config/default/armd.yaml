@@ -4,9 +4,13 @@ trainer:
   accelerator: gpu
   devices: 1
   strategy: auto
-  max_epochs: 2
+  # Paper mentions 2,000 iterations. 
+  # For small datasets (Solar), 2000 iters / ~50 batches = ~40 epochs.
+  # For large datasets (ETT), 2000 iters / ~500 batches = ~4 epochs.
+  # Setting to 50 ensures convergence for most standard benchmarks.
+  max_epochs: 3 
   use_distributed_sampler: false
-  limit_train_batches: 100
+  limit_train_batches: 1.0  # Use full data
   log_every_n_steps: 1
   default_root_dir: ./results
 model:
@@ -14,30 +18,38 @@ model:
     class_path: probts.model.forecaster.prob_forecaster.ARMD
     init_args:
       # --- ARMD Specific Parameters ---
-      loss_type: l1               # Paper explicitly uses L1 loss 
-      beta_schedule: cosine       # Cosine schedule is standard for this implementation
-      sampling_timesteps: 12      # Paper suggests small steps (e.g., 12) for fast inference 
-      w_grad: true                # Enable learnable weighting in the backbone
+      loss_type: l1                
+      beta_schedule: linear       
+      sampling_timesteps: 12      # Grid searched {1..12}
+      w_grad: true                # W(t) is "updated... during training"
+      
+      # Hyperparameters for Eq (5) 
+      # Grid search ranges: b={1, 1.5, 2}, c={-1, -0.5, 0.5, 1}, d={0.3, 0.5, 1}
+      b_param: 2.0
+      c_param: -1.0
+      d_param: 0.5
       
       # --- General Model Args ---
-      use_scaling: true           # Critical for diffusion-based models
+      use_scaling: true           
       
-      # ARMD uses a linear backbone that processes the whole sequence,
-      # so it typically doesn't need explicit lags or feature embeddings 
-      # like the RNN in TimeGrad does.
+      # ARMD uses a linear backbone processing the whole sequence 
+      # No lags or extra embeddings required
       use_lags: false             
       use_feat_idx_emb: false     
       use_time_feat: false        
 
-  learning_rate: 0.001            # Paper uses 1e-3 
+  learning_rate: 0.001            
   quantiles_num: 20
 data:
   data_manager:
     class_path: probts.data.data_manager.DataManager
     init_args:
-      dataset: solar_nips
-      scaler: identity            
-      split_val: true
-  batch_size: 128                 # Paper suggests batch size 128 
+      dataset: solar_nips         # One of the 7 benchmarks
+      scaler: standard            # "z-score normalized data" 
+      split_val: true             # 70/10/20 split
+      context_length: 96          # "historical length... set to 96" 
+      prediction_length: 96       # "prediction length... set to 96" 
+  
+  batch_size: 128                
   test_batch_size: 64
   num_workers: 8
