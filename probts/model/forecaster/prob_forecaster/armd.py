@@ -4,13 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from tqdm.auto import tqdm
-from functools import partial
 from einops import reduce 
 
 from probts.model.forecaster import Forecaster
 from probts.utils import repeat
-
 from probts.model.nn.arch.armd_layers import LinearBackbone, default, extract, linear_beta_schedule, cosine_beta_schedule
 
 class ARMD(Forecaster):
@@ -20,11 +17,14 @@ class ARMD(Forecaster):
             sampling_timesteps: int = None,
             loss_type: str = 'l1',
             w_grad: bool = True,
+            # Configurable hyperparameters for devolution
+            b_param: float = 2.0,
+            c_param: float = -1.0,
+            d_param: float = 0.5,
             **kwargs
     ):
         super().__init__(**kwargs)
         
-        # ARMD is "non-autoregressive" in generation (generates whole sequence at once).
         self.autoregressive = False 
         
         self.seq_length = self.prediction_length
@@ -38,13 +38,16 @@ class ARMD(Forecaster):
             n_feat=self.feature_size,
             n_channel=self.seq_length,
             timesteps=self.prediction_length,
-            w_grad=w_grad
+            w_grad=w_grad,
+            b_param=b_param,
+            c_param=c_param,
+            d_param=d_param
         )
 
         # -------------------------------------------------------
         # Diffusion Parameters
         # -------------------------------------------------------
-        timesteps = self.prediction_length # ARMD sets steps = prediction length
+        timesteps = self.prediction_length 
         self.num_timesteps = int(timesteps)
         
         if beta_schedule == 'linear':
@@ -58,31 +61,19 @@ class ARMD(Forecaster):
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.)
 
-        # Register buffers
         self.register_buffer('betas', betas.float())
         self.register_buffer('alphas_cumprod', alphas_cumprod.float())
         self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev.float())
 
-        # Calculations for diffusion q(x_t | x_{t-1})
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod).float())
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1. - alphas_cumprod).float())
         self.register_buffer('sqrt_recip_alphas_cumprod', torch.sqrt(1. / alphas_cumprod).float())
         self.register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1. / alphas_cumprod - 1).float())
 
-        # Calculations for posterior q(x_{t-1} | x_t, x_0)
-        posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
-        self.register_buffer('posterior_variance', posterior_variance.float())
-        self.register_buffer('posterior_log_variance_clipped', torch.log(posterior_variance.clamp(min=1e-20)).float())
-        self.register_buffer('posterior_mean_coef1', (betas * torch.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod)).float())
-        self.register_buffer('posterior_mean_coef2', ((1. - alphas_cumprod_prev) * torch.sqrt(alphas) / (1. - alphas_cumprod)).float())
-
-        # Loss weighting
         self.register_buffer('loss_weight', (torch.sqrt(alphas) * torch.sqrt(1. - alphas_cumprod) / betas / 100).float())
 
-        # Sampling settings
         self.sampling_timesteps = default(sampling_timesteps, timesteps)
         self.fast_sampling = self.sampling_timesteps < timesteps
-        self.eta = 0. # DDIM eta
 
     # -------------------------------------------------------
     # Helper Methods
@@ -95,7 +86,6 @@ class ARMD(Forecaster):
         )
 
     def model_predictions(self, x, t, clip_x_start=False, training=False):
-        # In ARMD, the model outputs the predicted x_start (x0) directly
         x_start = self.model(x, t, training=training)
         
         if clip_x_start:
@@ -106,32 +96,24 @@ class ARMD(Forecaster):
 
     def q_sample_sliding(self, future, history, t):
         """
-        ARMD Sliding Mechanism:
-        Constructs the intermediate state X^t by sliding the window.
-        x_start (future) is at t=0.
-        target (history) is at t=T.
+        ARMD Sliding Mechanism
         """
-        # Batch size
         b = future.shape[0]
         
-        # Concatenate History and Future: [B, Hist_Len + Pred_Len, C]
-        full_seq = torch.cat([history, future], dim=1)
+        # Ensure we only use the relevant immediate history
+        relevant_history = history[:, -self.prediction_length:, :]
+        
+        # Concatenate: [B, 2 * Pred_Len, C]
+        full_seq = torch.cat([relevant_history, future], dim=1)
         
         output_list = []
+        total_len = full_seq.shape[1]
+        
         for i in range(b):
             curr_t = t[i].item()
-            total_len = full_seq.shape[1]
-            # Slide logic: 
-            # t=0 -> Future (End of seq)
-            # t=T -> History (Start of seq, shifted by Prediction Length)
+            # Slide logic: t=0 -> Future, t=T -> History
             start_idx = total_len - self.prediction_length - curr_t
             end_idx = total_len - curr_t
-            
-            # Safety check
-            if start_idx < 0:
-                start_idx = 0
-                end_idx = self.prediction_length
-                
             output_list.append(full_seq[i, start_idx:end_idx, :])
             
         return torch.stack(output_list, dim=0)
@@ -141,29 +123,42 @@ class ARMD(Forecaster):
     # -------------------------------------------------------
 
     def loss(self, batch_data):
-        if self.use_scaling:
-            self.get_scale(batch_data)
-        
-        # Get Data
+        # 1. Get Data
         future_target = batch_data.future_target_cdf 
         past_target = batch_data.past_target_cdf 
         
+        # 2. Scaling (Pattern matched to TimeGrad)
         if self.use_scaling:
-            future_target = (future_target - self.scaler.loc) / self.scaler.scale
-            past_target = (past_target - self.scaler.loc) / self.scaler.scale
+            self.get_scale(batch_data)
+            
+            # Access scaler attributes directly
+            scale = self.scaler.scale
+            
+            # SAFEGUARD: Some scalers (TemporalScaler) might not have 'loc'.
+            # If missing, assume 0 (centered).
+            if hasattr(self.scaler, 'loc'):
+                loc = self.scaler.loc
+            elif hasattr(self.scaler, 'mean'): # Sometimes called 'mean'
+                loc = self.scaler.mean
+            else:
+                loc = torch.zeros_like(scale)
 
-        # Sample time steps
+            # Apply scaling
+            future_target = (future_target - loc) / scale
+            past_target = (past_target - loc) / scale
+
+        # 3. Time Sampling
         b = future_target.shape[0]
         device = future_target.device
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
-        # Generate Intermediate State X^t via Sliding
+        # 4. Generate Intermediate State X^t via Sliding
         x_t = self.q_sample_sliding(future_target, past_target, t)
         
-        # The Network predicts X^0 (Future) from X^t
+        # 5. Model Prediction
         model_out = self.model(x_t, t, training=True)
         
-        # Calculate Loss targets
+        # 6. Calculate Loss
         alpha = extract(self.sqrt_alphas_cumprod, t, x_t.shape)
         minus_alpha = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
         
@@ -177,7 +172,6 @@ class ARMD(Forecaster):
         else:
             loss = F.l1_loss(pred_noise, target_noise, reduction='none')
 
-        # Apply weighting
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss * extract(self.loss_weight, t, loss.shape)
         
@@ -188,23 +182,33 @@ class ARMD(Forecaster):
     # -------------------------------------------------------
 
     def forecast(self, batch_data, num_samples=None):
-        if self.use_scaling:
-            self.get_scale(batch_data)
-        
-        # Start with History (Final State X^T)
         past_target = batch_data.past_target_cdf
         
-        if self.use_scaling:
-            past_target = (past_target - self.scaler.loc) / self.scaler.scale
+        # Initialize default scaling params
+        loc = 0.0
+        scale = 1.0
 
-        # The starting point for sampling is the last 'pred_len' of history
+        if self.use_scaling:
+            self.get_scale(batch_data)
+            scale = self.scaler.scale
+            
+            # SAFEGUARD: Match logic in loss()
+            if hasattr(self.scaler, 'loc'):
+                loc = self.scaler.loc
+            elif hasattr(self.scaler, 'mean'):
+                loc = self.scaler.mean
+            else:
+                loc = torch.zeros_like(scale)
+            
+            past_target = (past_target - loc) / scale
+
+        # Start with History (Final State X^T)
         curr_img = past_target[:, -self.prediction_length:, :]
         
-        # Handle num_samples
         if num_samples is not None and num_samples > 1:
             curr_img = repeat(curr_img, num_samples, dim=0)
 
-        # Sampling Loop (Reverse Process)
+        # Sampling Loop (Reverse Devolution Process)
         total_timesteps = self.num_timesteps
         sampling_timesteps = self.sampling_timesteps
         
@@ -214,12 +218,11 @@ class ARMD(Forecaster):
         
         device = curr_img.device
         
-        # Loop
         for time, time_next in time_pairs: 
             b = curr_img.shape[0]
             t_cond = torch.full((b,), time, device=device, dtype=torch.long)
             
-            # Predict x_0 (future)
+            # Predict X^0 using the devolution network
             pred_noise, x_start = self.model_predictions(curr_img, t_cond, clip_x_start=False, training=False)
             
             if time_next < 0:
@@ -234,19 +237,26 @@ class ARMD(Forecaster):
             
             curr_img = x_start * alpha_next.sqrt() + c * pred_noise 
 
-        # Final Prediction
         forecasts = curr_img
         
+        # Descaling
         if self.use_scaling:
-             # Descale
              if num_samples is not None and num_samples > 1:
-                 loc = repeat(self.scaler.loc, num_samples, dim=0)
-                 scale = repeat(self.scaler.scale, num_samples, dim=0)
-                 forecasts = forecasts * scale + loc
+                 # Expand loc/scale to match samples
+                 if isinstance(loc, torch.Tensor):
+                     loc_rep = repeat(loc, num_samples, dim=0)
+                 else:
+                     loc_rep = loc
+                     
+                 if isinstance(scale, torch.Tensor):
+                     scale_rep = repeat(scale, num_samples, dim=0)
+                 else:
+                     scale_rep = scale
+                     
+                 forecasts = forecasts * scale_rep + loc_rep
              else:
-                 forecasts = forecasts * self.scaler.scale + self.scaler.loc
+                 forecasts = forecasts * scale + loc
 
-        # Reshape to [Batch, Samples, Pred_Len, Dim]
         if num_samples is None: 
             num_samples = 1
             

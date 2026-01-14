@@ -1,5 +1,4 @@
 # probts/model/nn/arch/armd_layers.py
-
 import math
 import torch
 import torch.nn as nn
@@ -37,28 +36,6 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
-class SinusoidalPosEmb(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, x):
-        device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = x[:, None] * emb[None, :]
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
-
-class Transpose(nn.Module):
-    def __init__(self, shape: tuple):
-        super(Transpose, self).__init__()
-        self.shape = shape
-
-    def forward(self, x):
-        return x.transpose(*self.shape)
-
 # --------------------------------------------------------------------------
 # Main Backbone: Linear ARMD Network
 # --------------------------------------------------------------------------
@@ -70,47 +47,64 @@ class LinearBackbone(nn.Module):
         n_channel,
         timesteps, 
         w_grad=True,
+        # Hyperparameters for Eq (5) 
+        b_param=2.0, 
+        c_param=-1.0, 
+        d_param=0.5,
         **kwargs
     ):
         super().__init__()
         self.linear = nn.Linear(n_channel, n_channel)
         
+        # Hyperparameters
+        self.b_param = b_param
+        self.c_param = c_param
+        self.d_param = d_param
+        
         # Dynamic schedule based on prediction length (timesteps)
         self.betas = linear_beta_schedule(timesteps)
+        
+        # NOTE: Paper uses DDPM coefficients for deviation (usually linear), 
+        # but your implementation chose cosine for the deviation schedule. Kept as is.
         self.betas_dev = cosine_beta_schedule(timesteps)
         
         self.alphas = 1. - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        self.alphas_dev = 1. - self.betas_dev
         
-        # Learnable parameters for weighting
-        # We convert numpy/tensor to Parameter to ensure they move to device/fp16 correctly
+        self.alphas_dev = 1. - self.betas_dev
+        # CORRECTION 1: Deviation weight uses cumulative product alpha_bar 
+        self.alphas_cumprod_dev = torch.cumprod(self.alphas_dev, dim=0)
+        
+        # Learnable parameters for weighting W(t) initialized with alpha_bar
         self.w = nn.Parameter(self.alphas_cumprod.float(), requires_grad=w_grad)
-        self.w_dev = nn.Parameter(self.alphas_dev.float(), requires_grad=False)
+        
+        # Deviation weight eta_{0:t}
+        self.w_dev = nn.Parameter(self.alphas_cumprod_dev.float(), requires_grad=False)
 
     def forward(self, input_, t, training=True):
-        # input_ shape: [Batch, Length, Channels/Features]
+        # input_ shape: [Batch, Length, Channels]
         
-        # Deviation Noise logic
+        # Deviation Noise logic 
         noise = torch.randn_like(input_)
         if not training:
             noise = 0
             
-        # Add deviation noise scaled by w_dev
+        # Add deviation noise scaled by w_dev (alpha_bar)
         w_dev_t = extract(self.w_dev, t, input_.shape)
         input_ = input_ + w_dev_t * noise
         
-        # Linear projection (permute to apply Linear on Length dimension)
-        # Assuming input is [B, L, C], we want to mix L. 
-        # original code: input_.permute(0,2,1) -> [B, C, L]
-        # Linear is [L, L]. 
-        x_tmp = self.linear(input_.permute(0,2,1)).permute(0,2,1)
+        # Linear projection to estimate Distance D 
+        # Permute to [B, C, L] to apply linear on L
+        D = self.linear(input_.permute(0,2,1)).permute(0,2,1)
         
-        # Weighted combination (Eq 5 in ARMD paper)
-        alpha = extract(self.w, t, input_.shape)
+        # Weighted combination Eq (5) 
+        # Formula: (W(t) * X + (1 - b*W(t)) * D) / (1 + c*W(t))^d
         
-        # Avoid division by zero issues or instability if 1-alpha is tiny
-        # The original code logic:
-        output = (alpha * input_ + (1 - 2 * alpha) * x_tmp) / ((1 - alpha)**0.5 + 1e-8)
+        W_t = extract(self.w, t, input_.shape)
+        
+        numerator = W_t * input_ + (1 - self.b_param * W_t) * D
+        denominator = (1 + self.c_param * W_t).pow(self.d_param) + 1e-8
+        
+        output = numerator / denominator
         
         return output
