@@ -24,7 +24,7 @@ class ARMD(Forecaster):
             **kwargs
     ):
         super().__init__(**kwargs)
-        
+        self.use_scaling=False
         self.autoregressive = False 
         
         self.seq_length = self.prediction_length
