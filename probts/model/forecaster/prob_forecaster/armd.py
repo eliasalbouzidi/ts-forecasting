@@ -13,7 +13,7 @@ from probts.model.nn.arch.armd_layers import LinearBackbone, default, extract, l
 class ARMD(Forecaster):
     def __init__(
             self,
-            beta_schedule: str = 'cosine',
+            beta_schedule: str = 'linear',
             sampling_timesteps: int = None,
             loss_type: str = 'l1',
             w_grad: bool = True,

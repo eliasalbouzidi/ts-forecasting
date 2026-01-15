@@ -65,14 +65,10 @@ class LinearBackbone(nn.Module):
         # Dynamic schedule based on prediction length (timesteps)
         self.betas = linear_beta_schedule(timesteps)
         
-        # Paper uses DDPM coefficients for deviation (usually linear)
-        # We chose cosine for the deviation schedule. 
-        self.betas_dev = cosine_beta_schedule(timesteps)
-        
         self.alphas = 1. - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
         
-        self.alphas_dev = 1. - self.betas_dev
+        self.alphas_dev = 1. - self.betas
         # Deviation weight uses cumulative product alpha_bar 
         self.alphas_cumprod_dev = torch.cumprod(self.alphas_dev, dim=0)
         
@@ -80,7 +76,7 @@ class LinearBackbone(nn.Module):
         self.w = nn.Parameter(self.alphas_cumprod.float(), requires_grad=w_grad)
         
         # Deviation weight eta_{0:t}
-        self.w_dev = nn.Parameter(self.alphas_cumprod_dev.float(), requires_grad=False)
+        self.w_dev = nn.Parameter(self.alphas_cumprod.float(), requires_grad=False)
 
     def forward(self, input_, t, training=True):
         # input_ shape: [Batch, Length, Channels]
