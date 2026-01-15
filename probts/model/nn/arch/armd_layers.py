@@ -32,12 +32,13 @@ def default(val, d):
     return d() if callable(d) else d
 
 def extract(a, t, x_shape):
+    # Allows to perform element-wise multiplication between the scalar diffusion coefficients and the multi-dimensional time series data.
     b, *_ = t.shape
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
 # --------------------------------------------------------------------------
-# Main Backbone: Linear ARMD Network
+# Main Backbone: Linear ARMD Network (Devolution Network R)
 # --------------------------------------------------------------------------
 
 class LinearBackbone(nn.Module):
@@ -64,15 +65,15 @@ class LinearBackbone(nn.Module):
         # Dynamic schedule based on prediction length (timesteps)
         self.betas = linear_beta_schedule(timesteps)
         
-        # NOTE: Paper uses DDPM coefficients for deviation (usually linear), 
-        # but your implementation chose cosine for the deviation schedule. Kept as is.
+        # Paper uses DDPM coefficients for deviation (usually linear)
+        # We chose cosine for the deviation schedule. 
         self.betas_dev = cosine_beta_schedule(timesteps)
         
         self.alphas = 1. - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
         
         self.alphas_dev = 1. - self.betas_dev
-        # CORRECTION 1: Deviation weight uses cumulative product alpha_bar 
+        # Deviation weight uses cumulative product alpha_bar 
         self.alphas_cumprod_dev = torch.cumprod(self.alphas_dev, dim=0)
         
         # Learnable parameters for weighting W(t) initialized with alpha_bar
@@ -90,6 +91,7 @@ class LinearBackbone(nn.Module):
             noise = 0
             
         # Add deviation noise scaled by w_dev (alpha_bar)
+        # X_input = X + eta_{0:t} *epsilon
         w_dev_t = extract(self.w_dev, t, input_.shape)
         input_ = input_ + w_dev_t * noise
         
