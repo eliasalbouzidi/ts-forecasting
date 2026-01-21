@@ -45,7 +45,7 @@ class LinearBackbone(nn.Module):
     def __init__(
         self,
         n_feat,
-        n_channel,
+        seq_len,
         timesteps, 
         w_grad=True,
         # Hyperparameters for Eq (5) 
@@ -55,7 +55,7 @@ class LinearBackbone(nn.Module):
         **kwargs
     ):
         super().__init__()
-        self.linear = nn.Linear(n_channel, n_channel)
+        self.linear = nn.Linear(seq_len, seq_len)
         
         # Hyperparameters
         self.b_param = b_param

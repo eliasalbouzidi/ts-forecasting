@@ -36,7 +36,7 @@ class ARMD(Forecaster):
         # -------------------------------------------------------
         self.model = LinearBackbone(
             n_feat=self.feature_size,
-            n_channel=self.seq_length,
+            seq_len=self.seq_length,
             timesteps=self.prediction_length,
             w_grad=w_grad,
             b_param=b_param,
