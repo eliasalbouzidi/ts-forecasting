@@ -48,6 +48,7 @@ class LinearBackbone(nn.Module):
         seq_len,
         timesteps, 
         w_grad=True,
+        alphas_cumprod=None,
         # Hyperparameters for Eq (5) 
         b_param=2.0, 
         c_param=-1.0, 
@@ -62,21 +63,18 @@ class LinearBackbone(nn.Module):
         self.c_param = c_param
         self.d_param = d_param
         
-        # Dynamic schedule based on prediction length (timesteps)
-        self.betas = linear_beta_schedule(timesteps)
-        
-        self.alphas = 1. - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        
-        self.alphas_dev = 1. - self.betas
-        # Deviation weight uses cumulative product alpha_bar 
-        self.alphas_cumprod_dev = torch.cumprod(self.alphas_dev, dim=0)
-        
+        if alphas_cumprod is None:
+            betas = linear_beta_schedule(timesteps)
+            alphas = 1. - betas
+            alphas_cumprod = torch.cumprod(alphas, dim=0)
+        else:
+            alphas_cumprod = alphas_cumprod.detach().clone()
+
         # Learnable parameters for weighting W(t) initialized with alpha_bar
-        self.w = nn.Parameter(self.alphas_cumprod.float(), requires_grad=w_grad)
+        self.w = nn.Parameter(alphas_cumprod.float(), requires_grad=w_grad)
         
-        # Deviation weight eta_{0:t}
-        self.w_dev = nn.Parameter(self.alphas_cumprod.float(), requires_grad=False)
+        # Deviation weight eta_{0:t} (fixed schedule)
+        self.register_buffer('w_dev', alphas_cumprod.float())
 
     def forward(self, input_, t, training=True):
         # input_ shape: [Batch, Length, Channels]

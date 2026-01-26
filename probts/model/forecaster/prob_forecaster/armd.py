@@ -32,22 +32,9 @@ class ARMD(Forecaster):
         self.loss_type = loss_type
 
         # -------------------------------------------------------
-        # Initialize Backbone (Devolution Network R)
-        # -------------------------------------------------------
-        self.model = LinearBackbone(
-            n_feat=self.feature_size,
-            seq_len=self.seq_length,
-            timesteps=self.prediction_length,
-            w_grad=w_grad,
-            b_param=b_param,
-            c_param=c_param,
-            d_param=d_param
-        ) 
-
-        # -------------------------------------------------------
         # Diffusion Parameters
         # -------------------------------------------------------
-        timesteps = self.prediction_length 
+        timesteps = self.prediction_length
         self.num_timesteps = int(timesteps)
         
         if beta_schedule == 'linear':
@@ -61,6 +48,20 @@ class ARMD(Forecaster):
         alphas = 1. - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.)
+
+        # -------------------------------------------------------
+        # Initialize Backbone (Devolution Network R)
+        # -------------------------------------------------------
+        self.model = LinearBackbone(
+            n_feat=self.feature_size,
+            seq_len=self.seq_length,
+            timesteps=self.prediction_length,
+            w_grad=w_grad,
+            alphas_cumprod=alphas_cumprod,
+            b_param=b_param,
+            c_param=c_param,
+            d_param=d_param
+        ) 
         
         # self.register_buffer ensures: Automatic Device Movement, State Dictionary saving, and No Gradients
         # Register the base schedules
@@ -74,11 +75,10 @@ class ARMD(Forecaster):
         self.register_buffer('sqrt_recip_alphas_cumprod', torch.sqrt(1. / alphas_cumprod).float())
         self.register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1. / alphas_cumprod - 1).float())
 
-        # Register loss weights
-        self.register_buffer('loss_weight', (torch.sqrt(alphas) * torch.sqrt(1. - alphas_cumprod) / betas / 100).float())
-
-        self.sampling_timesteps = default(sampling_timesteps, timesteps)
-        self.fast_sampling = self.sampling_timesteps < timesteps
+        self.sampling_timesteps = int(default(sampling_timesteps, 1))
+        if self.sampling_timesteps < 1:
+            self.sampling_timesteps = 1
+        self.fast_sampling = self.sampling_timesteps > 1
 
     # -------------------------------------------------------
     # Helper Methods
@@ -121,8 +121,8 @@ class ARMD(Forecaster):
         total_len = full_seq.shape[1]
         
         for i in range(b):
-            curr_t = t[i].item()
-            # Slide logic: t=0 -> Future, t=T -> History
+            curr_t = t[i].item() + 1
+            # Slide logic: t=1 -> slight shift toward history, t=T -> history
             start_idx = total_len - self.prediction_length - curr_t
             end_idx = total_len - curr_t
             output_list.append(full_seq[i, start_idx:end_idx, :])
@@ -184,7 +184,6 @@ class ARMD(Forecaster):
             loss = F.l1_loss(pred_noise, target_noise, reduction='none')
 
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss * extract(self.loss_weight, t, loss.shape)
         
         return loss.mean()
 
@@ -221,11 +220,13 @@ class ARMD(Forecaster):
 
         # Sampling Loop (Reverse Devolution Process)
         total_timesteps = self.num_timesteps
-        sampling_timesteps = self.sampling_timesteps
-        
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) 
+        sampling_interval = self.sampling_timesteps
+
+        times = list(range(total_timesteps - 1, -1, -sampling_interval))
+        if times[-1] != 0:
+            times.append(0)
+        times.append(-1)
+        time_pairs = list(zip(times[:-1], times[1:]))
         
         device = curr_img.device
         
