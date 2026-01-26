@@ -28,6 +28,8 @@ class Evaluator:
             "abs_target_mean": abs_target_mean(targets),
             "MAPE": mape(targets, median_forecasts),
             "sMAPE": smape(targets, median_forecasts),
+            "DTW": dtw_distance(targets, median_forecasts),
+            "extreme_MAE": extreme_mae(targets, median_forecasts),
         }
         
         if seasonal_error is not None:
@@ -92,7 +94,7 @@ class Evaluator:
 
     @property
     def selected_metrics(self):
-        return [ "ND",'weighted_ND', 'CRPS', "NRMSE", "MSE", "MASE"]
+        return ["ND", "weighted_ND", "CRPS", "NRMSE", "MSE", "MASE", "MAPE", "sMAPE", "DTW", "extreme_MAE"]
 
     def __call__(self, targets, forecasts, past_data, freq, loss_weights=None):
         """
