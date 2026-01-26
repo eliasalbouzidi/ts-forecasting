@@ -1,0 +1,53 @@
+# lightning==2.3.0.dev0
+seed_everything: 1
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 1 
+  max_steps: 2000
+  use_distributed_sampler: false
+  limit_train_batches: 2000
+  val_check_interval: 0.25
+  log_every_n_steps: 1
+  default_root_dir: ./results
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.ARMD
+    init_args:
+      # --- ARMD Specific Parameters ---
+      loss_type: l1                
+      beta_schedule: linear       
+      sampling_timesteps: 12      # Sampling interval Δt grid searched {1..12}
+      w_grad: true                # W(t) is "updated... during training"
+      
+      # Hyperparameters for Eq (5) 
+      # Grid search ranges: b={1, 1.5, 2}, c={-1, -0.5, 0.5, 1}, d={0.3, 0.5, 1}
+      b_param: 2.0
+      c_param: -1.0
+      d_param: 0.5
+      
+      # --- General Model Args ---
+      use_scaling: False           
+      
+      # ARMD uses a linear backbone processing the whole sequence 
+      # No lags or extra embeddings required
+      use_lags: false             
+      use_feat_idx_emb: false     
+      use_time_feat: false        
+
+  learning_rate: 0.001            
+  quantiles_num: 20
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: etth1              # Long-term dataset
+      scaler: standard            # "z-score normalized data" 
+      split_val: true             # 70/10/20 split
+      context_length: 96          # "historical length... set to 96" 
+      prediction_length: 96       # "prediction length... set to 96" 
+  
+  batch_size: 128                
+  test_batch_size: 64
+  num_workers: 2
