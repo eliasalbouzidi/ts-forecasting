@@ -4,10 +4,11 @@ trainer:
   accelerator: gpu
   devices: 1
   strategy: auto
-  max_epochs: 3 
-  max_steps: 100
+  max_epochs: 1 
+  max_steps: 2000
   use_distributed_sampler: false
-  limit_train_batches: 100
+  limit_train_batches: 2000
+  val_check_interval: 0.25
   log_every_n_steps: 1
   default_root_dir: ./results
 model:
@@ -17,7 +18,7 @@ model:
       # --- ARMD Specific Parameters ---
       loss_type: l1                
       beta_schedule: linear       
-      sampling_timesteps: 12      # Grid searched {1..12}
+      sampling_timesteps: 12      # Sampling interval Δt grid searched {1..12}
       w_grad: true                # W(t) is "updated... during training"
       
       # Hyperparameters for Eq (5) 
@@ -41,7 +42,7 @@ data:
   data_manager:
     class_path: probts.data.data_manager.DataManager
     init_args:
-      dataset: solar_nips         # One of the 7 benchmarks
+      dataset: etth1              # Long-term dataset
       scaler: standard            # "z-score normalized data" 
       split_val: true             # 70/10/20 split
       context_length: 96          # "historical length... set to 96" 
@@ -49,4 +50,4 @@ data:
   
   batch_size: 128                
   test_batch_size: 64
-  num_workers: 8
+  num_workers: 2
