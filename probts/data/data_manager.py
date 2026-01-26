@@ -45,6 +45,7 @@ class DataManager:
         context_length_factor: int = 1,
         timeenc: int = 1,
         var_specific_norm: bool = True,
+        scaler_fit_on_full_data: bool = False,
         data_path: str = None,
         freq: str = None,
         multivariate: bool = True,
@@ -104,6 +105,9 @@ class DataManager:
             - 2: Raw Timestamp information.
         var_specific_norm : bool, optional, default=True
             Whether to normalize variables independently. Only applies when `scaler='standard'`.
+        scaler_fit_on_full_data : bool, optional, default=False
+            If True, fit the scaler on the full dataset (train + val + test) instead of only the
+            training split. This enables controlled data leakage for experiments.
         data_path : str, optional, default=None
             Specific path to the dataset file.
         freq : str, optional, default=None
@@ -135,6 +139,7 @@ class DataManager:
         self.context_length_factor = context_length_factor
         self.timeenc = timeenc
         self.var_specific_norm = var_specific_norm
+        self.scaler_fit_on_full_data = scaler_fit_on_full_data
         self.data_path = data_path
         self.freq = freq
         self.multivariate = multivariate
@@ -145,6 +150,8 @@ class DataManager:
         
         self.test_rolling_dict = {'h': 24, 'd': 7, 'b':5, 'w':4, 'min': 60}
         self.global_mean = None
+        if self.scaler_fit_on_full_data:
+            print("Warning: scaler_fit_on_full_data=True will fit the scaler on train+val+test data (data leakage).")
 
         # Configure scaler
         self.scaler = self._configure_scaler(self.scaler_type)
@@ -280,8 +287,9 @@ class DataManager:
         val_data = self.dataset_raw[: self.border_end[1]]
         test_data = self.dataset_raw[: self.border_end[2]]
         
-        # Calculate statictics using training data
-        self.scaler.fit(torch.tensor(train_data.values))
+        # Calculate statistics using training data (or full data for controlled leakage)
+        scaler_fit_data = self.dataset_raw if self.scaler_fit_on_full_data else train_data
+        self.scaler.fit(torch.tensor(scaler_fit_data.values))
         
         # Convert dataframes to multivariate datasets
         train_set = df_to_mvds(train_data, freq=self.freq)
@@ -386,7 +394,12 @@ class DataManager:
             )
             train_set = train_grouper(self.dataset_raw.train)
             test_set = test_grouper(self.dataset_raw.test)
-            self.scaler.fit(torch.tensor(train_set[0]['target'].transpose(1, 0)))
+            if self.scaler_fit_on_full_data:
+                all_targets = [torch.tensor(train_set[i]['target'].transpose(1, 0)) for i in range(len(train_set))]
+                all_targets.extend(torch.tensor(test_set[i]['target'].transpose(1, 0)) for i in range(len(test_set)))
+                self.scaler.fit(torch.cat(all_targets, dim=0))
+            else:
+                self.scaler.fit(torch.tensor(train_set[0]['target'].transpose(1, 0)))
             self.global_mean = torch.mean(torch.tensor(train_set[0]['target']), dim=-1)
             
             # split_val
