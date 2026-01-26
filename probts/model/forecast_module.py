@@ -120,7 +120,20 @@ class ProbTSForecastModule(pl.LightningModule):
         else:
             loss_weights = None
 
-        hor_metrics = self.evaluator(orin_future_data, denorm_forecasts, past_data=orin_past_data, freq=self.forecaster.freq, loss_weights=loss_weights)
+        hor_metrics = self.evaluator(
+            orin_future_data,
+            denorm_forecasts,
+            past_data=orin_past_data,
+            freq=self.forecaster.freq,
+            loss_weights=loss_weights,
+        )
+        hor_norm_metrics = self.evaluator(
+            norm_future_data,
+            forecasts,
+            past_data=norm_past_data,
+            freq=self.forecaster.freq,
+            loss_weights=loss_weights,
+        )
         
         if stage == 'test':
             hor_str = get_hor_str(self.forecaster.prediction_length, dataloader_idx)
@@ -129,6 +142,12 @@ class ProbTSForecastModule(pl.LightningModule):
 
             
             self.hor_metrics[hor_str] = update_metrics(hor_metrics, stage, target_dict=self.hor_metrics[hor_str])
+            self.hor_metrics[hor_str] = update_metrics(
+                hor_norm_metrics,
+                stage,
+                key='norm',
+                target_dict=self.hor_metrics[hor_str],
+            )
 
         return hor_metrics
 
