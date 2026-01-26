@@ -5,6 +5,7 @@ from probts.data import ProbTSDataModule
 from probts.model.forecast_module import ProbTSForecastModule
 from probts.callbacks import MemoryCallback, TimeCallback
 from probts.utils import find_best_epoch
+from probts.utils.evaluator import Evaluator
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -43,10 +44,29 @@ class ProbTSCli(LightningCLI):
             parser.link_arguments(f"data.data_manager.{arg}", f"model.{arg}", apply_on="instantiate")
         for arg in data_to_forecaster_link_args:
             parser.link_arguments(f"data.data_manager.{arg}", f"model.forecaster.init_args.{arg}", apply_on="instantiate")
+        parser.add_argument(
+            "--monitor_metric",
+            type=str,
+            default="auto",
+            help=(
+                "Metric to monitor for best checkpoint. "
+                "Use 'auto' (default) or a metric name like 'CRPS', 'weighted_ND', 'MASE', "
+                "'norm_CRPS', or full key like 'val_CRPS'."
+            ),
+        )
+        parser.add_argument(
+            "--wandb_run_name",
+            type=str,
+            default=None,
+            help="Optional W&B run name. Defaults to the auto-generated tag.",
+        )
 
     def init_exp(self):
         config_args = self.parser.parse_args()
+        self.wandb_run_name = config_args.wandb_run_name
         
+        dl_suffix = "_dl" if getattr(self.datamodule.data_manager, "scaler_fit_on_full_data", False) else ""
+
         if self.datamodule.data_manager.multi_hor:
             assert self.model.forecaster.name in MULTI_HOR_MODEL, f"Only support multi-horizon setting for {MULTI_HOR_MODEL}"
             
@@ -58,7 +78,7 @@ class ProbTSCli(LightningCLI):
                 'ValCTX','-'.join([str(i) for i in self.datamodule.data_manager.val_ctx_len_list]),
                 'ValPRED','-'.join([str(i) for i in self.datamodule.data_manager.val_pred_len_list]),
                 'seed' + str(config_args.seed_everything)
-            ])
+            ]) + dl_suffix
         else:
             self.tag = "_".join([
                 self.datamodule.data_manager.dataset,
@@ -66,7 +86,7 @@ class ProbTSCli(LightningCLI):
                 'CTX' + str(self.datamodule.data_manager.context_length),
                 'PRED' + str(self.datamodule.data_manager.prediction_length),
                 'seed' + str(config_args.seed_everything)
-            ])
+            ]) + dl_suffix
         
         log.info(f"Root dir is {self.trainer.default_root_dir}, exp tag is {self.tag}")
         
@@ -118,6 +138,11 @@ class ProbTSCli(LightningCLI):
                     monitor = 'val_CRPS'
                 else:
                     monitor = 'val_weighted_ND'
+            monitor = self._resolve_monitor_metric(
+                config_args.monitor_metric,
+                monitor,
+                has_val=self.datamodule.dataset_val is not None,
+            )
             
             # Set callbacks
             self.checkpoint_callback = ModelCheckpoint(
@@ -133,6 +158,41 @@ class ProbTSCli(LightningCLI):
             callbacks.append(self.checkpoint_callback)
 
         self.set_callbacks(callbacks)
+        self._log_available_metrics()
+
+    def _log_available_metrics(self):
+        base_metrics = Evaluator().selected_metrics + ["loss"]
+        base_metrics = sorted(set(base_metrics))
+        log.info(
+            "Available monitor metrics: %s (prefix with 'norm_' or 'val_' if needed)",
+            ", ".join(base_metrics),
+        )
+
+    def _resolve_monitor_metric(self, requested, default_monitor, has_val):
+        if requested == "auto":
+            return default_monitor
+
+        metric = requested.strip()
+        if metric.startswith("test_"):
+            log.warning("Monitor metric %s is test-only; using %s instead.", metric, default_monitor)
+            return default_monitor
+
+        if metric in ("loss", "train_loss", "val_loss"):
+            if metric == "loss":
+                return "val_loss" if has_val else "train_loss"
+            if metric == "val_loss" and not has_val:
+                log.warning("val_loss requested but no val set; using train_loss.")
+                return "train_loss"
+            return metric
+
+        if metric.startswith(("val_", "train_")):
+            if metric.startswith("val_") and not has_val:
+                log.warning("%s requested but no val set; using train_%s.", metric, metric[4:])
+                return f"train_{metric[4:]}"
+            return metric
+
+        stage = "val" if has_val else "train"
+        return f"{stage}_{metric}"
 
     def set_callbacks(self, callbacks):
         # Replace built-in callbacks with custom callbacks
@@ -155,7 +215,7 @@ class ProbTSCli(LightningCLI):
     
         self.wandb_logger = WandbLogger(
             project="probts",
-            name=self.tag,
+            name=self.wandb_run_name or self.tag,
             save_dir=f'{self.save_dict}/logs',
         )
     
