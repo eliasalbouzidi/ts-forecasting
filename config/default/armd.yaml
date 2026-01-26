@@ -44,6 +44,7 @@ data:
     init_args:
       dataset: etth1              # Long-term dataset
       scaler: standard            # "z-score normalized data" 
+      scaler_fit_on_full_data: false # fit scaler on full dataset (train+val+test)
       split_val: true             # 70/10/20 split
       context_length: 96          # "historical length... set to 96" 
       prediction_length: 96       # "prediction length... set to 96" 
