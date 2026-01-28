@@ -5,6 +5,7 @@ from .trans_maf import Trans_MAF
 from .csdi import CSDI
 from .tsdiff import TSDiffCond
 from .armd import ARMD
+from .dyffusion import Dyffusion
 # ------- add lag_llama to sys.path ---------
 try:
     import os, sys
