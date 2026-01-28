@@ -1,5 +1,7 @@
 # lightning==2.3.0.dev0
 seed_everything: 1
+# checkpoint selection metric; options include val_loss, val_CRPS, val_weighted_ND, norm_CRPS, etc.
+monitor_metric: val_loss
 trainer:
   accelerator: gpu
   devices: 1

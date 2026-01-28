@@ -3,6 +3,7 @@ import torch
 from torch import optim
 from typing import Dict
 import lightning.pytorch as pl
+from lightning.pytorch.loggers import WandbLogger
 import sys
 
 from probts.data import ProbTSBatchData
@@ -88,7 +89,8 @@ class ProbTSForecastModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         batch_data = ProbTSBatchData(batch, self.device)
         loss = self.training_forward(batch_data)
-        self.log("train_loss", loss, on_step=True, prog_bar=True, logger=True)
+        self.log("train_loss", loss, on_step=True, prog_bar=True, logger=False)
+        self._log_metrics_all({"train_loss": float(loss.detach().cpu())})
         return loss
 
     def evaluate(self, batch, stage='',dataloader_idx=None):
@@ -120,7 +122,20 @@ class ProbTSForecastModule(pl.LightningModule):
         else:
             loss_weights = None
 
-        hor_metrics = self.evaluator(orin_future_data, denorm_forecasts, past_data=orin_past_data, freq=self.forecaster.freq, loss_weights=loss_weights)
+        hor_metrics = self.evaluator(
+            orin_future_data,
+            denorm_forecasts,
+            past_data=orin_past_data,
+            freq=self.forecaster.freq,
+            loss_weights=loss_weights,
+        )
+        hor_norm_metrics = self.evaluator(
+            norm_future_data,
+            forecasts,
+            past_data=norm_past_data,
+            freq=self.forecaster.freq,
+            loss_weights=loss_weights,
+        )
         
         if stage == 'test':
             hor_str = get_hor_str(self.forecaster.prediction_length, dataloader_idx)
@@ -129,10 +144,21 @@ class ProbTSForecastModule(pl.LightningModule):
 
             
             self.hor_metrics[hor_str] = update_metrics(hor_metrics, stage, target_dict=self.hor_metrics[hor_str])
+            self.hor_metrics[hor_str] = update_metrics(
+                hor_norm_metrics,
+                stage,
+                key='norm',
+                target_dict=self.hor_metrics[hor_str],
+            )
 
         return hor_metrics
 
     def validation_step(self, batch, batch_idx, dataloader_idx=None):
+        with torch.no_grad():
+            batch_data = ProbTSBatchData(batch, self.device)
+            val_loss = self.training_forward(batch_data)
+        self.log("val_loss", val_loss, prog_bar=True, logger=False)
+        self._log_metrics_all({"val_loss": float(val_loss.detach().cpu())})
         metrics = self.evaluate(batch, stage='val',dataloader_idx=dataloader_idx)
         return metrics
 
@@ -144,7 +170,8 @@ class ProbTSForecastModule(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         avg_metrics = calculate_weighted_average(self.metrics_dict, self.batch_size)
-        self.log_dict(avg_metrics, prog_bar=True)
+        self.log_dict(avg_metrics, prog_bar=True, logger=False)
+        self._log_metrics_all(avg_metrics)
 
     def test_step(self, batch, batch_idx, dataloader_idx=None):
         metrics = self.evaluate(batch, stage='test',dataloader_idx=dataloader_idx)
@@ -166,7 +193,8 @@ class ProbTSForecastModule(pl.LightningModule):
             self.avg_metrics = calculate_weighted_average(self.metrics_dict, self.batch_size)
         
         if isinstance(self.forecaster.prediction_length, int) or len(self.forecaster.prediction_length) < 2:
-            self.log_dict(self.avg_metrics, logger=True)
+            self.log_dict(self.avg_metrics, logger=False)
+            self._log_metrics_all(self.avg_metrics)
 
     def predict_step(self, batch, batch_idx):
         batch_data = ProbTSBatchData(batch, self.device)
@@ -198,3 +226,41 @@ class ProbTSForecastModule(pl.LightningModule):
             return {"optimizer": optimizer, "lr_scheduler": lr_scheduler}
 
         return optimizer
+
+    def _log_metrics_all(self, metrics: Dict[str, float]):
+        if not hasattr(self, "trainer") or self.trainer is None:
+            return
+        for logger in self.trainer.loggers:
+            if isinstance(logger, WandbLogger):
+                logger.log_metrics(self._format_wandb_metrics(metrics), step=self.global_step)
+            else:
+                metrics_with_meta = dict(metrics)
+                metrics_with_meta["epoch"] = int(self.current_epoch)
+                metrics_with_meta["step"] = int(self.global_step)
+                logger.log_metrics(metrics_with_meta, step=self.global_step)
+
+    def _format_wandb_metrics(self, metrics: Dict[str, float]) -> Dict[str, float]:
+        formatted = {}
+        for key, value in metrics.items():
+            parts = key.split("_")
+            if len(parts) >= 2 and parts[0].isdigit():
+                hor = parts[0]
+                stage = parts[1]
+                rest = parts[2:]
+                if rest[:1] == ["norm"]:
+                    rest = rest[1:]
+                    new_key = f"{stage}/{hor}/norm/" + "_".join(rest)
+                else:
+                    new_key = f"{stage}/{hor}/" + "_".join(rest)
+            elif parts[0] in ("train", "val", "test"):
+                stage = parts[0]
+                rest = parts[1:]
+                if rest[:1] == ["norm"]:
+                    rest = rest[1:]
+                    new_key = f"{stage}/norm/" + "_".join(rest)
+                else:
+                    new_key = f"{stage}/" + "_".join(rest)
+            else:
+                new_key = key
+            formatted[new_key] = value
+        return formatted
