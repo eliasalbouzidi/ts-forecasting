@@ -180,7 +180,7 @@ class Dydiff(Forecaster):
         eps_hat = self._predict_eps(x_t_flat, t_idx_flat, context_rep, h_emb_flat, prior_flat)
         loss = F.mse_loss(eps_hat, eps.reshape(-1, self.target_dim), reduction="none")
         loss = loss.view(bsz, horizon, self.target_dim).mean(dim=-1)
-        return loss
+        return loss.mean()
 
     def forecast(self, batch_data, num_samples=None):
         past_target = batch_data.past_target_cdf[:, -self.max_context_length :, :]
