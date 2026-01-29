@@ -42,6 +42,7 @@ class Dydiff(Forecaster):
         dropout: float = 0.1,
         num_diffusion_steps: int = 100,
         beta_end: float = 0.1,
+        sample_chunk_size: int = 10,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -53,6 +54,7 @@ class Dydiff(Forecaster):
         self.dropout = dropout
         self.num_diffusion_steps = int(num_diffusion_steps)
         self.beta_end = float(beta_end)
+        self.sample_chunk_size = int(sample_chunk_size) if sample_chunk_size is not None else None
 
         self.horizon = int(self.max_prediction_length)
 
@@ -191,47 +193,50 @@ class Dydiff(Forecaster):
         horizon_len = int(self.max_prediction_length)
         prior, h_emb = self._build_prior(context, horizon_len)
 
-        if num_samples > 1:
-            context = context.repeat_interleave(num_samples, dim=0)
-            prior = prior.repeat_interleave(num_samples, dim=0)
-            h_emb = h_emb.repeat_interleave(num_samples, dim=0)
+        chunk_size = self.sample_chunk_size or num_samples
+        chunk_size = max(1, min(chunk_size, num_samples))
+        samples = []
+        remaining = num_samples
 
-        bsz = context.shape[0]
-        x_t = torch.randn(bsz, horizon_len, self.target_dim, device=context.device)
+        while remaining > 0:
+            curr = min(chunk_size, remaining)
+            remaining -= curr
 
-        for step in reversed(range(self.num_diffusion_steps)):
-            t_idx = torch.full((bsz, horizon_len), step, device=context.device, dtype=torch.long)
-            x_t_flat = x_t.reshape(-1, self.target_dim)
-            prior_flat = prior.reshape(-1, self.target_dim)
-            context_rep = context.unsqueeze(1).expand(-1, horizon_len, -1).reshape(-1, self.hidden_dim)
-            h_emb_flat = h_emb.reshape(-1, self.horizon_embed_dim)
-            t_idx_flat = t_idx.reshape(-1)
+            context_rep = context.repeat_interleave(curr, dim=0)
+            prior_rep = prior.repeat_interleave(curr, dim=0)
+            h_emb_rep = h_emb.repeat_interleave(curr, dim=0)
 
-            eps_hat = self._predict_eps(x_t_flat, t_idx_flat, context_rep, h_emb_flat, prior_flat)
+            bsz = context_rep.shape[0]
+            x_t = torch.randn(bsz, horizon_len, self.target_dim, device=context_rep.device)
 
-            alpha_t = self._extract(
-                self.alphas, t_idx_flat, x_t_flat
-            )
-            sqrt_recip_alpha = self._extract(
-                self.sqrt_recip_alphas, t_idx_flat, x_t_flat
-            )
-            alpha_bar = self._extract(
-                self.alphas_cumprod, t_idx_flat, x_t_flat
-            )
+            for step in reversed(range(self.num_diffusion_steps)):
+                t_idx = torch.full((bsz, horizon_len), step, device=context_rep.device, dtype=torch.long)
+                x_t_flat = x_t.reshape(-1, self.target_dim)
+                prior_flat = prior_rep.reshape(-1, self.target_dim)
+                context_flat = context_rep.unsqueeze(1).expand(-1, horizon_len, -1).reshape(-1, self.hidden_dim)
+                h_emb_flat = h_emb_rep.reshape(-1, self.horizon_embed_dim)
+                t_idx_flat = t_idx.reshape(-1)
 
-            mean = (
-                sqrt_recip_alpha
-                * (x_t_flat - (1.0 - alpha_t) / torch.sqrt(1.0 - alpha_bar) * eps_hat)
-            )
+                eps_hat = self._predict_eps(x_t_flat, t_idx_flat, context_flat, h_emb_flat, prior_flat)
 
-            if step > 0:
-                var = self._extract(self.posterior_variance, t_idx_flat, x_t_flat)
-                noise = torch.randn_like(x_t_flat)
-                x_t_flat = mean + torch.sqrt(var) * noise
-            else:
-                x_t_flat = mean
+                alpha_t = self._extract(self.alphas, t_idx_flat, x_t_flat)
+                sqrt_recip_alpha = self._extract(self.sqrt_recip_alphas, t_idx_flat, x_t_flat)
+                alpha_bar = self._extract(self.alphas_cumprod, t_idx_flat, x_t_flat)
 
-            x_t = x_t_flat.view(bsz, horizon_len, self.target_dim)
+                mean = (
+                    sqrt_recip_alpha
+                    * (x_t_flat - (1.0 - alpha_t) / torch.sqrt(1.0 - alpha_bar) * eps_hat)
+                )
 
-        forecasts = x_t.view(-1, num_samples, horizon_len, self.target_dim)
-        return forecasts
+                if step > 0:
+                    var = self._extract(self.posterior_variance, t_idx_flat, x_t_flat)
+                    noise = torch.randn_like(x_t_flat)
+                    x_t_flat = mean + torch.sqrt(var) * noise
+                else:
+                    x_t_flat = mean
+
+                x_t = x_t_flat.view(bsz, horizon_len, self.target_dim)
+
+            samples.append(x_t.view(-1, curr, horizon_len, self.target_dim))
+
+        return torch.cat(samples, dim=1)
