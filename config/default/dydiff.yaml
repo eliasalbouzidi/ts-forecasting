@@ -22,11 +22,12 @@ model:
       dropout: 0.1
       num_diffusion_steps: 100
       beta_end: 0.1
+      sample_chunk_size: 10
       use_lags: false
       use_feat_idx_emb: false
       use_time_feat: false
       use_scaling: false
-  num_samples: 100
+  num_samples: 10
   learning_rate: 0.001
   quantiles_num: 20
 data:
