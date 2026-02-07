@@ -48,6 +48,9 @@ model:
   wandb_report_metrics: ["loss", "MSE", "MAE", "MAPE", "sMAPE", "CRPS"]
   wandb_metric_views: ["norm"]
   wandb_include_sum: false
+  wandb_log_forecast_plots: true
+  wandb_forecast_plot_max_dims: 0
+  wandb_forecast_plot_view: denorm
   load_from_ckpt: null
 data:
   data_manager: null
