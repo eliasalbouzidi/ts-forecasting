@@ -15,6 +15,7 @@ from probts.utils.save_utils import update_metrics, calculate_weighted_average, 
 from probts.utils.utils import init_class_helper
 
 DEFAULT_WANDB_REPORT_METRICS = ["loss", "MSE", "MAE", "MAPE", "sMAPE", "CRPS"]
+DEFAULT_WANDB_METRIC_VIEWS = ["norm"]
 
 def get_weights(sampling_weight_scheme, max_hor):
     '''
@@ -43,6 +44,8 @@ class ProbTSForecastModule(pl.LightningModule):
         learning_rate: float = 1e-3,
         quantiles_num: int = 10,
         wandb_report_metrics: Optional[List[str]] = None,
+        wandb_metric_views: Optional[List[str]] = None,
+        wandb_include_sum: bool = False,
         load_from_ckpt: str = None,
         sampling_weight_scheme: str = 'none',
         optimizer_config = None,
@@ -70,6 +73,11 @@ class ProbTSForecastModule(pl.LightningModule):
             self.wandb_report_metrics = list(DEFAULT_WANDB_REPORT_METRICS)
         else:
             self.wandb_report_metrics = list(wandb_report_metrics)
+        if wandb_metric_views is None:
+            self.wandb_metric_views = list(DEFAULT_WANDB_METRIC_VIEWS)
+        else:
+            self.wandb_metric_views = [str(v).strip().lower() for v in wandb_metric_views]
+        self.wandb_include_sum = bool(wandb_include_sum)
         
         # init the parapemetr for sampling
         self.sampling_weight_scheme = sampling_weight_scheme
@@ -250,13 +258,28 @@ class ProbTSForecastModule(pl.LightningModule):
 
     def _filter_wandb_metrics(self, metrics: Dict[str, float]) -> Dict[str, float]:
         configured = {m.strip() for m in self.wandb_report_metrics if isinstance(m, str) and m.strip()}
+        views = {v for v in self.wandb_metric_views if v in {"denorm", "norm"}}
+
         if not configured:
             return metrics
+        if not views:
+            views = set(DEFAULT_WANDB_METRIC_VIEWS)
 
         filtered = {}
         for key, value in metrics.items():
             leaf_name = key.split("/")[-1]
-            if leaf_name in configured:
+            is_sum = leaf_name.endswith("-Sum")
+            if is_sum and not self.wandb_include_sum:
+                continue
+
+            is_norm = "/norm/" in f"/{key}/"
+            if is_norm and "norm" not in views:
+                continue
+            if (not is_norm) and "denorm" not in views:
+                continue
+
+            base_name = leaf_name[:-4] if is_sum else leaf_name
+            if base_name in configured:
                 filtered[key] = value
         return filtered
 
