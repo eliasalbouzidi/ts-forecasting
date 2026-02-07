@@ -45,6 +45,7 @@ model:
   num_samples: 100
   learning_rate: 0.001
   quantiles_num: 10
+  wandb_report_metrics: ["loss", "MSE", "MAE", "MAPE", "sMAPE", "CRPS"]
   load_from_ckpt: null
 data:
   data_manager: null

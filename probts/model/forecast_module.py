@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch import optim
-from typing import Dict
+from typing import Dict, List, Optional
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import WandbLogger
 import sys
@@ -13,6 +13,8 @@ from probts.utils.evaluator import Evaluator
 from probts.utils.metrics import *
 from probts.utils.save_utils import update_metrics, calculate_weighted_average, load_checkpoint, get_hor_str
 from probts.utils.utils import init_class_helper
+
+DEFAULT_WANDB_REPORT_METRICS = ["loss", "MSE", "MAE", "MAPE", "sMAPE", "CRPS"]
 
 def get_weights(sampling_weight_scheme, max_hor):
     '''
@@ -40,6 +42,7 @@ class ProbTSForecastModule(pl.LightningModule):
         num_samples: int = 100,
         learning_rate: float = 1e-3,
         quantiles_num: int = 10,
+        wandb_report_metrics: Optional[List[str]] = None,
         load_from_ckpt: str = None,
         sampling_weight_scheme: str = 'none',
         optimizer_config = None,
@@ -63,6 +66,10 @@ class ProbTSForecastModule(pl.LightningModule):
         
         self.scaler = scaler
         self.evaluator = Evaluator(quantiles_num=quantiles_num)
+        if wandb_report_metrics is None:
+            self.wandb_report_metrics = list(DEFAULT_WANDB_REPORT_METRICS)
+        else:
+            self.wandb_report_metrics = list(wandb_report_metrics)
         
         # init the parapemetr for sampling
         self.sampling_weight_scheme = sampling_weight_scheme
@@ -232,12 +239,26 @@ class ProbTSForecastModule(pl.LightningModule):
             return
         for logger in self.trainer.loggers:
             if isinstance(logger, WandbLogger):
-                logger.log_metrics(self._format_wandb_metrics(metrics), step=self.global_step)
+                wandb_metrics = self._format_wandb_metrics(metrics)
+                wandb_metrics = self._filter_wandb_metrics(wandb_metrics)
+                logger.log_metrics(wandb_metrics, step=self.global_step)
             else:
                 metrics_with_meta = dict(metrics)
                 metrics_with_meta["epoch"] = int(self.current_epoch)
                 metrics_with_meta["step"] = int(self.global_step)
                 logger.log_metrics(metrics_with_meta, step=self.global_step)
+
+    def _filter_wandb_metrics(self, metrics: Dict[str, float]) -> Dict[str, float]:
+        configured = {m.strip() for m in self.wandb_report_metrics if isinstance(m, str) and m.strip()}
+        if not configured:
+            return metrics
+
+        filtered = {}
+        for key, value in metrics.items():
+            leaf_name = key.split("/")[-1]
+            if leaf_name in configured:
+                filtered[key] = value
+        return filtered
 
     def _format_wandb_metrics(self, metrics: Dict[str, float]) -> Dict[str, float]:
         formatted = {}

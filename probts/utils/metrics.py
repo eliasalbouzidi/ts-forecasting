@@ -30,6 +30,14 @@ def abs_error(target: np.ndarray, forecast: np.ndarray) -> float:
     """
     return np.sum(np.abs(target - forecast))
 
+def mae(target: np.ndarray, forecast: np.ndarray) -> float:
+    r"""
+    .. math::
+
+        mae = mean(|Y - \hat{Y}|)
+    """
+    return np.mean(np.abs(target - forecast))
+
 
 def abs_target_sum(target) -> float:
     r"""

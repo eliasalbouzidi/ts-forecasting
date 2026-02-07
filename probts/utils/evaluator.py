@@ -23,6 +23,7 @@ class Evaluator:
         median_forecasts = np.quantile(forecasts, 0.5, axis=samples_dim)
         metrics = {
             "MSE": mse(targets, mean_forecasts),
+            "MAE": mae(targets, median_forecasts),
             "abs_error": abs_error(targets, median_forecasts),
             "abs_target_sum": abs_target_sum(targets),
             "abs_target_mean": abs_target_mean(targets),
@@ -94,7 +95,7 @@ class Evaluator:
 
     @property
     def selected_metrics(self):
-        return ["ND", "weighted_ND", "CRPS", "NRMSE", "MSE", "MASE", "MAPE", "sMAPE", "DTW", "extreme_MAE"]
+        return ["ND", "weighted_ND", "CRPS", "NRMSE", "MSE", "MAE", "MASE", "MAPE", "sMAPE", "DTW", "extreme_MAE"]
 
     def __call__(self, targets, forecasts, past_data, freq, loss_weights=None):
         """
