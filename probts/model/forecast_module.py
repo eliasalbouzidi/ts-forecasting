@@ -4,6 +4,7 @@ from torch import optim
 from typing import Dict, List, Optional
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import WandbLogger
+import matplotlib.pyplot as plt
 import sys
 
 from probts.data import ProbTSBatchData
@@ -46,6 +47,9 @@ class ProbTSForecastModule(pl.LightningModule):
         wandb_report_metrics: Optional[List[str]] = None,
         wandb_metric_views: Optional[List[str]] = None,
         wandb_include_sum: bool = False,
+        wandb_log_forecast_plots: bool = True,
+        wandb_forecast_plot_max_dims: int = 0,
+        wandb_forecast_plot_view: str = "denorm",
         load_from_ckpt: str = None,
         sampling_weight_scheme: str = 'none',
         optimizer_config = None,
@@ -78,6 +82,12 @@ class ProbTSForecastModule(pl.LightningModule):
         else:
             self.wandb_metric_views = [str(v).strip().lower() for v in wandb_metric_views]
         self.wandb_include_sum = bool(wandb_include_sum)
+        self.wandb_log_forecast_plots = bool(wandb_log_forecast_plots)
+        self.wandb_forecast_plot_max_dims = int(wandb_forecast_plot_max_dims)
+        self.wandb_forecast_plot_view = str(wandb_forecast_plot_view).strip().lower()
+        if self.wandb_forecast_plot_view not in {"denorm", "norm"}:
+            self.wandb_forecast_plot_view = "denorm"
+        self._test_plot_payload = None
         
         # init the parapemetr for sampling
         self.sampling_weight_scheme = sampling_weight_scheme
@@ -165,6 +175,16 @@ class ProbTSForecastModule(pl.LightningModule):
                 key='norm',
                 target_dict=self.hor_metrics[hor_str],
             )
+            if self.wandb_log_forecast_plots and self._test_plot_payload is None:
+                plot_idx = orin_past_data.shape[0] // 2
+                self._test_plot_payload = {
+                    "denorm_past": orin_past_data[plot_idx].detach().cpu().numpy(),
+                    "denorm_future": orin_future_data[plot_idx].detach().cpu().numpy(),
+                    "denorm_forecast_samples": denorm_forecasts[plot_idx].detach().cpu().numpy(),
+                    "norm_past": norm_past_data[plot_idx].detach().cpu().numpy(),
+                    "norm_future": norm_future_data[plot_idx].detach().cpu().numpy(),
+                    "norm_forecast_samples": forecasts[plot_idx].detach().cpu().numpy(),
+                }
 
         return hor_metrics
 
@@ -198,6 +218,7 @@ class ProbTSForecastModule(pl.LightningModule):
         self.avg_metrics = {}
         self.avg_hor_metrics = {}
         self.batch_size = []
+        self._test_plot_payload = None
 
     def on_test_epoch_end(self):
         if len(self.hor_metrics) > 0:
@@ -210,6 +231,7 @@ class ProbTSForecastModule(pl.LightningModule):
         if isinstance(self.forecaster.prediction_length, int) or len(self.forecaster.prediction_length) < 2:
             self.log_dict(self.avg_metrics, logger=False)
             self._log_metrics_all(self.avg_metrics)
+        self._log_wandb_forecast_plots()
 
     def predict_step(self, batch, batch_idx):
         batch_data = ProbTSBatchData(batch, self.device)
@@ -249,12 +271,20 @@ class ProbTSForecastModule(pl.LightningModule):
             if isinstance(logger, WandbLogger):
                 wandb_metrics = self._format_wandb_metrics(metrics)
                 wandb_metrics = self._filter_wandb_metrics(wandb_metrics)
-                logger.log_metrics(wandb_metrics, step=self.global_step)
+                logger.log_metrics(wandb_metrics, step=self._get_wandb_safe_step(logger))
             else:
                 metrics_with_meta = dict(metrics)
                 metrics_with_meta["epoch"] = int(self.current_epoch)
                 metrics_with_meta["step"] = int(self.global_step)
                 logger.log_metrics(metrics_with_meta, step=self.global_step)
+
+    def _get_wandb_safe_step(self, logger: WandbLogger) -> int:
+        step = int(self.global_step)
+        try:
+            run_step = int(getattr(logger.experiment, "step", step))
+            return max(step, run_step)
+        except Exception:
+            return step
 
     def _filter_wandb_metrics(self, metrics: Dict[str, float]) -> Dict[str, float]:
         configured = {m.strip() for m in self.wandb_report_metrics if isinstance(m, str) and m.strip()}
@@ -308,3 +338,68 @@ class ProbTSForecastModule(pl.LightningModule):
                 new_key = key
             formatted[new_key] = value
         return formatted
+
+    def _log_wandb_forecast_plots(self):
+        if not self.wandb_log_forecast_plots or self._test_plot_payload is None:
+            return
+        if not hasattr(self, "trainer") or self.trainer is None:
+            return
+
+        try:
+            import wandb
+        except Exception:
+            return
+
+        plot_view = self.wandb_forecast_plot_view
+        if plot_view == "norm":
+            past = self._test_plot_payload["norm_past"]  # [history_length, target_dim]
+            future = self._test_plot_payload["norm_future"]  # [prediction_length, target_dim]
+            forecast_samples = self._test_plot_payload["norm_forecast_samples"]  # [num_samples, prediction_length, target_dim]
+        else:
+            past = self._test_plot_payload["denorm_past"]  # [history_length, target_dim]
+            future = self._test_plot_payload["denorm_future"]  # [prediction_length, target_dim]
+            forecast_samples = self._test_plot_payload["denorm_forecast_samples"]  # [num_samples, prediction_length, target_dim]
+
+        pred_median = np.quantile(forecast_samples, 0.5, axis=0)
+        pred_p10 = np.quantile(forecast_samples, 0.1, axis=0)
+        pred_p90 = np.quantile(forecast_samples, 0.9, axis=0)
+
+        target_dim = past.shape[-1]
+        if self.wandb_forecast_plot_max_dims > 0:
+            max_dims = min(target_dim, self.wandb_forecast_plot_max_dims)
+        else:
+            max_dims = target_dim
+
+        x_hist = np.arange(past.shape[0])
+        x_future = np.arange(past.shape[0], past.shape[0] + future.shape[0])
+        images = []
+
+        for dim in range(max_dims):
+            fig, ax = plt.subplots(figsize=(10, 3))
+            ax.plot(x_hist, past[:, dim], label="history", color="black", linewidth=1.5)
+            ax.plot(x_future, future[:, dim], label="future_truth", color="tab:blue", linewidth=1.5)
+            ax.plot(x_future, pred_median[:, dim], label="forecast_median", color="tab:orange", linewidth=1.8)
+            ax.fill_between(
+                x_future,
+                pred_p10[:, dim],
+                pred_p90[:, dim],
+                color="tab:orange",
+                alpha=0.2,
+                label="forecast_p10_p90",
+            )
+            ax.axvline(x=past.shape[0] - 1, color="gray", linestyle="--", linewidth=1)
+            ax.set_title(f"Test Forecast ({plot_view}) - dim {dim}")
+            ax.set_xlabel("time")
+            ax.set_ylabel("value")
+            ax.legend(loc="best")
+            ax.grid(alpha=0.2)
+            fig.tight_layout()
+            images.append(wandb.Image(fig, caption=f"dim={dim}"))
+            plt.close(fig)
+
+        for logger in self.trainer.loggers:
+            if isinstance(logger, WandbLogger):
+                logger.experiment.log(
+                    {f"test/forecast_plots_{plot_view}": images},
+                    step=self._get_wandb_safe_step(logger),
+                )
