@@ -301,6 +301,11 @@ class ProbTSForecastModule(pl.LightningModule):
             is_sum = leaf_name.endswith("-Sum")
             if is_sum and not self.wandb_include_sum:
                 continue
+            base_name = leaf_name[:-4] if is_sum else leaf_name
+            if base_name == "loss":
+                if base_name in configured:
+                    filtered[key] = value
+                continue
 
             is_norm = "/norm/" in f"/{key}/"
             if is_norm and "norm" not in views:
@@ -308,7 +313,6 @@ class ProbTSForecastModule(pl.LightningModule):
             if (not is_norm) and "denorm" not in views:
                 continue
 
-            base_name = leaf_name[:-4] if is_sum else leaf_name
             if base_name in configured:
                 filtered[key] = value
         return filtered

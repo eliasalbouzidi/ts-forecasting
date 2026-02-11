@@ -1,6 +1,8 @@
 import os
 import torch
 import logging
+from pathlib import Path
+import sys
 from probts.data import ProbTSDataModule
 from probts.model.forecast_module import ProbTSForecastModule
 from probts.callbacks import MemoryCallback, TimeCallback
@@ -64,6 +66,7 @@ class ProbTSCli(LightningCLI):
     def init_exp(self):
         config_args = self.parser.parse_args()
         self.wandb_run_name = config_args.wandb_run_name
+        self.run_config_paths = self._extract_run_config_paths(config_args)
         
         dl_suffix = "_dl" if getattr(self.datamodule.data_manager, "scaler_fit_on_full_data", False) else ""
 
@@ -220,6 +223,67 @@ class ProbTSCli(LightningCLI):
         )
     
         self.trainer.loggers = [tb_logger, self.wandb_logger]
+        self._upload_run_config_to_wandb()
+
+    def _extract_run_config_paths(self, config_args):
+        config_candidates = []
+
+        cfg = getattr(config_args, "config", None)
+        if cfg is not None:
+            if isinstance(cfg, (list, tuple)):
+                config_candidates.extend(cfg)
+            else:
+                config_candidates.append(cfg)
+
+        # Fallback: parse explicit CLI flags if parser output does not expose config paths.
+        argv = sys.argv[1:]
+        i = 0
+        while i < len(argv):
+            token = argv[i]
+            if token in ("--config", "-c") and i + 1 < len(argv):
+                config_candidates.append(argv[i + 1])
+                i += 2
+                continue
+            if token.startswith("--config="):
+                config_candidates.append(token.split("=", 1)[1])
+            i += 1
+
+        resolved = []
+        seen = set()
+        for c in config_candidates:
+            p = Path(str(c)).expanduser()
+            if not p.exists() or not p.is_file():
+                continue
+            rp = p.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            resolved.append(rp)
+        return resolved
+
+    def _upload_run_config_to_wandb(self):
+        if not hasattr(self, "wandb_logger"):
+            return
+
+        run = getattr(self.wandb_logger, "experiment", None)
+        if run is None:
+            return
+
+        config_paths = getattr(self, "run_config_paths", [])
+        if not config_paths:
+            log.warning("No run config path detected; skipped W&B run-config upload.")
+            return
+
+        saved = 0
+        for path in config_paths:
+            try:
+                run.save(str(path), policy="now")
+                saved += 1
+            except Exception as exc:
+                log.warning("Failed to save run config file '%s' to W&B run files: %s", path, exc)
+
+        if saved:
+            log.info("Saved %d run config file(s) to W&B run files.", saved)
     
     def set_test_mode(self):
         csv_logger = CSVLogger(
