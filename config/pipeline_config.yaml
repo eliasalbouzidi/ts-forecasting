@@ -45,12 +45,12 @@ model:
   num_samples: 100
   learning_rate: 0.001
   quantiles_num: 10
-  wandb_report_metrics: ["loss", "MSE", "MAE", "MAPE", "sMAPE", "CRPS"]
+  wandb_report_metrics: ["loss", "MSE", "MAE", "sMAPE", "CRPS", "DTW"]
   wandb_metric_views: ["norm"]
   wandb_include_sum: false
   wandb_log_forecast_plots: true
   wandb_forecast_plot_max_dims: 0
-  wandb_forecast_plot_view: denorm
+  wandb_forecast_plot_view: both
   load_from_ckpt: null
 data:
   data_manager: null

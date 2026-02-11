@@ -15,7 +15,7 @@ from probts.utils.metrics import *
 from probts.utils.save_utils import update_metrics, calculate_weighted_average, load_checkpoint, get_hor_str
 from probts.utils.utils import init_class_helper
 
-DEFAULT_WANDB_REPORT_METRICS = ["loss", "MSE", "MAE", "MAPE", "sMAPE", "CRPS"]
+DEFAULT_WANDB_REPORT_METRICS = ["loss", "MSE", "MAE", "sMAPE", "CRPS", "DTW"]
 DEFAULT_WANDB_METRIC_VIEWS = ["norm"]
 
 def get_weights(sampling_weight_scheme, max_hor):
@@ -49,7 +49,7 @@ class ProbTSForecastModule(pl.LightningModule):
         wandb_include_sum: bool = False,
         wandb_log_forecast_plots: bool = True,
         wandb_forecast_plot_max_dims: int = 0,
-        wandb_forecast_plot_view: str = "denorm",
+        wandb_forecast_plot_view: str = "both",
         load_from_ckpt: str = None,
         sampling_weight_scheme: str = 'none',
         optimizer_config = None,
@@ -85,8 +85,8 @@ class ProbTSForecastModule(pl.LightningModule):
         self.wandb_log_forecast_plots = bool(wandb_log_forecast_plots)
         self.wandb_forecast_plot_max_dims = int(wandb_forecast_plot_max_dims)
         self.wandb_forecast_plot_view = str(wandb_forecast_plot_view).strip().lower()
-        if self.wandb_forecast_plot_view not in {"denorm", "norm"}:
-            self.wandb_forecast_plot_view = "denorm"
+        if self.wandb_forecast_plot_view not in {"denorm", "norm", "both"}:
+            self.wandb_forecast_plot_view = "both"
         self._test_plot_payload = None
         
         # init the parapemetr for sampling
@@ -350,56 +350,58 @@ class ProbTSForecastModule(pl.LightningModule):
         except Exception:
             return
 
-        plot_view = self.wandb_forecast_plot_view
-        if plot_view == "norm":
-            past = self._test_plot_payload["norm_past"]  # [history_length, target_dim]
-            future = self._test_plot_payload["norm_future"]  # [prediction_length, target_dim]
-            forecast_samples = self._test_plot_payload["norm_forecast_samples"]  # [num_samples, prediction_length, target_dim]
-        else:
-            past = self._test_plot_payload["denorm_past"]  # [history_length, target_dim]
-            future = self._test_plot_payload["denorm_future"]  # [prediction_length, target_dim]
-            forecast_samples = self._test_plot_payload["denorm_forecast_samples"]  # [num_samples, prediction_length, target_dim]
+        plot_views = ["denorm", "norm"] if self.wandb_forecast_plot_view == "both" else [self.wandb_forecast_plot_view]
 
-        pred_median = np.quantile(forecast_samples, 0.5, axis=0)
-        pred_p10 = np.quantile(forecast_samples, 0.1, axis=0)
-        pred_p90 = np.quantile(forecast_samples, 0.9, axis=0)
+        for plot_view in plot_views:
+            if plot_view == "norm":
+                past = self._test_plot_payload["norm_past"]  # [history_length, target_dim]
+                future = self._test_plot_payload["norm_future"]  # [prediction_length, target_dim]
+                forecast_samples = self._test_plot_payload["norm_forecast_samples"]  # [num_samples, prediction_length, target_dim]
+            else:
+                past = self._test_plot_payload["denorm_past"]  # [history_length, target_dim]
+                future = self._test_plot_payload["denorm_future"]  # [prediction_length, target_dim]
+                forecast_samples = self._test_plot_payload["denorm_forecast_samples"]  # [num_samples, prediction_length, target_dim]
 
-        target_dim = past.shape[-1]
-        if self.wandb_forecast_plot_max_dims > 0:
-            max_dims = min(target_dim, self.wandb_forecast_plot_max_dims)
-        else:
-            max_dims = target_dim
+            pred_median = np.quantile(forecast_samples, 0.5, axis=0)
+            pred_p10 = np.quantile(forecast_samples, 0.1, axis=0)
+            pred_p90 = np.quantile(forecast_samples, 0.9, axis=0)
 
-        x_hist = np.arange(past.shape[0])
-        x_future = np.arange(past.shape[0], past.shape[0] + future.shape[0])
-        images = []
+            target_dim = past.shape[-1]
+            if self.wandb_forecast_plot_max_dims > 0:
+                max_dims = min(target_dim, self.wandb_forecast_plot_max_dims)
+            else:
+                max_dims = target_dim
 
-        for dim in range(max_dims):
-            fig, ax = plt.subplots(figsize=(10, 3))
-            ax.plot(x_hist, past[:, dim], label="history", color="black", linewidth=1.5)
-            ax.plot(x_future, future[:, dim], label="future_truth", color="tab:blue", linewidth=1.5)
-            ax.plot(x_future, pred_median[:, dim], label="forecast_median", color="tab:orange", linewidth=1.8)
-            ax.fill_between(
-                x_future,
-                pred_p10[:, dim],
-                pred_p90[:, dim],
-                color="tab:orange",
-                alpha=0.2,
-                label="forecast_p10_p90",
-            )
-            ax.axvline(x=past.shape[0] - 1, color="gray", linestyle="--", linewidth=1)
-            ax.set_title(f"Test Forecast ({plot_view}) - dim {dim}")
-            ax.set_xlabel("time")
-            ax.set_ylabel("value")
-            ax.legend(loc="best")
-            ax.grid(alpha=0.2)
-            fig.tight_layout()
-            images.append(wandb.Image(fig, caption=f"dim={dim}"))
-            plt.close(fig)
+            x_hist = np.arange(past.shape[0])
+            x_future = np.arange(past.shape[0], past.shape[0] + future.shape[0])
+            images = []
 
-        for logger in self.trainer.loggers:
-            if isinstance(logger, WandbLogger):
-                logger.experiment.log(
-                    {f"test/forecast_plots_{plot_view}": images},
-                    step=self._get_wandb_safe_step(logger),
+            for dim in range(max_dims):
+                fig, ax = plt.subplots(figsize=(10, 3))
+                ax.plot(x_hist, past[:, dim], label="history", color="black", linewidth=1.5)
+                ax.plot(x_future, future[:, dim], label="future_truth", color="tab:blue", linewidth=1.5)
+                ax.plot(x_future, pred_median[:, dim], label="forecast_median", color="tab:orange", linewidth=1.8)
+                ax.fill_between(
+                    x_future,
+                    pred_p10[:, dim],
+                    pred_p90[:, dim],
+                    color="tab:orange",
+                    alpha=0.2,
+                    label="forecast_p10_p90",
                 )
+                ax.axvline(x=past.shape[0] - 1, color="gray", linestyle="--", linewidth=1)
+                ax.set_title(f"Test Forecast ({plot_view}) - dim {dim}")
+                ax.set_xlabel("time")
+                ax.set_ylabel("value")
+                ax.legend(loc="best")
+                ax.grid(alpha=0.2)
+                fig.tight_layout()
+                images.append(wandb.Image(fig, caption=f"dim={dim}"))
+                plt.close(fig)
+
+            for logger in self.trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    logger.experiment.log(
+                        {f"test/forecast_plots_{plot_view}": images},
+                        step=self._get_wandb_safe_step(logger),
+                    )
