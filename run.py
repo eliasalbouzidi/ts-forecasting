@@ -1,6 +1,8 @@
 import os
 import torch
 import logging
+from pathlib import Path
+import sys
 from probts.data import ProbTSDataModule
 from probts.model.forecast_module import ProbTSForecastModule
 from probts.callbacks import MemoryCallback, TimeCallback
@@ -64,6 +66,7 @@ class ProbTSCli(LightningCLI):
     def init_exp(self):
         config_args = self.parser.parse_args()
         self.wandb_run_name = config_args.wandb_run_name
+        self.run_config_paths = self._extract_run_config_paths(config_args)
         
         dl_suffix = "_dl" if getattr(self.datamodule.data_manager, "scaler_fit_on_full_data", False) else ""
 
@@ -145,12 +148,14 @@ class ProbTSCli(LightningCLI):
             )
             
             # Set callbacks
+            monitor_token = monitor.replace("/", "_")
             self.checkpoint_callback = ModelCheckpoint(
                 dirpath=f'{self.save_dict}/ckpt',
-                filename='{epoch}-{val_CRPS:.6f}',
+                filename=f'{{epoch}}-{{{monitor_token}:.6f}}',
                 every_n_epochs=1,
                 monitor=monitor,
-                save_top_k=-1,
+                mode='min',
+                save_top_k=1,
                 save_last=True,
                 enable_version_counter=False
             )
@@ -220,6 +225,67 @@ class ProbTSCli(LightningCLI):
         )
     
         self.trainer.loggers = [tb_logger, self.wandb_logger]
+        self._upload_run_config_to_wandb()
+
+    def _extract_run_config_paths(self, config_args):
+        config_candidates = []
+
+        cfg = getattr(config_args, "config", None)
+        if cfg is not None:
+            if isinstance(cfg, (list, tuple)):
+                config_candidates.extend(cfg)
+            else:
+                config_candidates.append(cfg)
+
+        # Fallback: parse explicit CLI flags if parser output does not expose config paths.
+        argv = sys.argv[1:]
+        i = 0
+        while i < len(argv):
+            token = argv[i]
+            if token in ("--config", "-c") and i + 1 < len(argv):
+                config_candidates.append(argv[i + 1])
+                i += 2
+                continue
+            if token.startswith("--config="):
+                config_candidates.append(token.split("=", 1)[1])
+            i += 1
+
+        resolved = []
+        seen = set()
+        for c in config_candidates:
+            p = Path(str(c)).expanduser()
+            if not p.exists() or not p.is_file():
+                continue
+            rp = p.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            resolved.append(rp)
+        return resolved
+
+    def _upload_run_config_to_wandb(self):
+        if not hasattr(self, "wandb_logger"):
+            return
+
+        run = getattr(self.wandb_logger, "experiment", None)
+        if run is None:
+            return
+
+        config_paths = getattr(self, "run_config_paths", [])
+        if not config_paths:
+            log.warning("No run config path detected; skipped W&B run-config upload.")
+            return
+
+        saved = 0
+        for path in config_paths:
+            try:
+                run.save(str(path), policy="now")
+                saved += 1
+            except Exception as exc:
+                log.warning("Failed to save run config file '%s' to W&B run files: %s", path, exc)
+
+        if saved:
+            log.info("Saved %d run config file(s) to W&B run files.", saved)
     
     def set_test_mode(self):
         csv_logger = CSVLogger(
@@ -235,10 +301,17 @@ class ProbTSCli(LightningCLI):
 
 
         if not self.model.forecaster.no_training:
-            self.ckpt = self.checkpoint_callback.best_model_path
-            log.info(f"Loading best checkpoint from {self.ckpt}")
+            self.ckpt = self._resolve_test_checkpoint()
+            if self.ckpt is None:
+                log.warning(
+                    "No checkpoint found for test-time reload. "
+                    "Proceeding with in-memory model weights from the end of training."
+                )
+                return
+
+            log.info(f"Loading checkpoint for test from {self.ckpt}")
             self.model = ProbTSForecastModule.load_from_checkpoint(
-                self.ckpt, 
+                self.ckpt,
                 scaler=self.datamodule.data_manager.scaler,
                 context_length=self.datamodule.data_manager.context_length,
                 target_dim=self.datamodule.data_manager.target_dim,
@@ -248,6 +321,25 @@ class ProbTSCli(LightningCLI):
                 time_feat_dim=self.datamodule.data_manager.time_feat_dim,
                 sampling_weight_scheme=self.model.sampling_weight_scheme,
             )
+
+    def _resolve_test_checkpoint(self):
+        # Some checkpoint policies (e.g. save_top_k=-1) may not populate best_model_path.
+        candidates = [
+            getattr(self.checkpoint_callback, "best_model_path", ""),
+            getattr(self.checkpoint_callback, "last_model_path", ""),
+        ]
+        for ckpt_path in candidates:
+            if ckpt_path and os.path.isfile(ckpt_path):
+                return ckpt_path
+
+        ckpt_dir = f"{self.save_dict}/ckpt"
+        if os.path.isdir(ckpt_dir):
+            _, best_ckpt = find_best_epoch(ckpt_dir)
+            if best_ckpt is not None:
+                ckpt_path = os.path.join(ckpt_dir, best_ckpt)
+                if os.path.isfile(ckpt_path):
+                    return ckpt_path
+        return None
 
     def run(self):
         self.init_exp()
