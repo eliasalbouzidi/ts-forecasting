@@ -148,12 +148,14 @@ class ProbTSCli(LightningCLI):
             )
             
             # Set callbacks
+            monitor_token = monitor.replace("/", "_")
             self.checkpoint_callback = ModelCheckpoint(
                 dirpath=f'{self.save_dict}/ckpt',
-                filename='{epoch}-{val_CRPS:.6f}',
+                filename=f'{{epoch}}-{{{monitor_token}:.6f}}',
                 every_n_epochs=1,
                 monitor=monitor,
-                save_top_k=-1,
+                mode='min',
+                save_top_k=1,
                 save_last=True,
                 enable_version_counter=False
             )
@@ -299,10 +301,17 @@ class ProbTSCli(LightningCLI):
 
 
         if not self.model.forecaster.no_training:
-            self.ckpt = self.checkpoint_callback.best_model_path
-            log.info(f"Loading best checkpoint from {self.ckpt}")
+            self.ckpt = self._resolve_test_checkpoint()
+            if self.ckpt is None:
+                log.warning(
+                    "No checkpoint found for test-time reload. "
+                    "Proceeding with in-memory model weights from the end of training."
+                )
+                return
+
+            log.info(f"Loading checkpoint for test from {self.ckpt}")
             self.model = ProbTSForecastModule.load_from_checkpoint(
-                self.ckpt, 
+                self.ckpt,
                 scaler=self.datamodule.data_manager.scaler,
                 context_length=self.datamodule.data_manager.context_length,
                 target_dim=self.datamodule.data_manager.target_dim,
@@ -312,6 +321,25 @@ class ProbTSCli(LightningCLI):
                 time_feat_dim=self.datamodule.data_manager.time_feat_dim,
                 sampling_weight_scheme=self.model.sampling_weight_scheme,
             )
+
+    def _resolve_test_checkpoint(self):
+        # Some checkpoint policies (e.g. save_top_k=-1) may not populate best_model_path.
+        candidates = [
+            getattr(self.checkpoint_callback, "best_model_path", ""),
+            getattr(self.checkpoint_callback, "last_model_path", ""),
+        ]
+        for ckpt_path in candidates:
+            if ckpt_path and os.path.isfile(ckpt_path):
+                return ckpt_path
+
+        ckpt_dir = f"{self.save_dict}/ckpt"
+        if os.path.isdir(ckpt_dir):
+            _, best_ckpt = find_best_epoch(ckpt_dir)
+            if best_ckpt is not None:
+                ckpt_path = os.path.join(ckpt_dir, best_ckpt)
+                if os.path.isfile(ckpt_path):
+                    return ckpt_path
+        return None
 
     def run(self):
         self.init_exp()
