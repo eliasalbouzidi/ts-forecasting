@@ -1,0 +1,57 @@
+# DyFFusion on NOAA OISSTv2 - Sea Surface Temperature
+# Single patch (60x60 = 3600 grid points as variates), daily frequency
+#
+# Usage:
+#   python run.py --config config/default/dyffusion.yaml --config config/sst/dyffusion_sst.yaml
+#
+# To use a different patch (0-10):
+#   python run.py --config config/default/dyffusion.yaml --config config/sst/dyffusion_sst.yaml \
+#     --data.data_manager.init_args.dataset sst_patch_05
+
+seed_everything: 1
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 50
+  use_distributed_sampler: false
+  limit_train_batches: 2000
+  log_every_n_steps: 1
+  check_val_every_n_epoch: 1
+  default_root_dir: ./results/sst
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.Dyffusion
+    init_args:
+      training_stage: forecaster
+      hidden_dim: 128
+      num_layers: 2
+      time_embed_dim: 64
+      dropout: 0.1
+      num_diffusion_steps: 7     # N = h (forecast 1-7 days)
+      sampling_steps: 7
+      lookahead_loss: true
+      condition_on_xt: false
+      stochastic_interpolator: true
+      use_lags: false
+      use_feat_idx_emb: false
+      use_time_feat: false
+      use_scaling: false
+  num_samples: 100
+  learning_rate: 0.001
+  quantiles_num: 20
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: sst_patch_00
+      split_val: true
+      scaler: standard
+      scaler_fit_on_full_data: false
+      context_length: 64          # 64-day context window (paper: 64 timesteps)
+      prediction_length: 7        # forecast 1-7 days ahead
+      train_ratio: 0.7
+      test_ratio: 0.2
+  batch_size: 16                  # smaller batch for large target_dim (3600)
+  test_batch_size: 8
+  num_workers: 4
