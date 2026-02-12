@@ -36,7 +36,19 @@ def get_dataset_info(dataset, data_path=None, freq=None):
         'caiso': ('caiso/caiso_20130101_20210630.csv', 'H'),
         'nordpool': ('nordpool/production.csv', 'H'),
         'turkey_power': ('kaggle/power Generation and consumption.csv', 'H'),
-        'istanbul_traffic': ('kaggle/istanbul_traffic.csv', 'H')
+        'istanbul_traffic': ('kaggle/istanbul_traffic.csv', 'H'),
+        # SST patches (NOAA OISSTv2) — one entry per patch
+        'sst_patch_00': ('sst/2019/sst_patch_00.csv', 'D'),
+        'sst_patch_01': ('sst/2019/sst_patch_01.csv', 'D'),
+        'sst_patch_02': ('sst/2019/sst_patch_02.csv', 'D'),
+        'sst_patch_03': ('sst/2019/sst_patch_03.csv', 'D'),
+        'sst_patch_04': ('sst/2019/sst_patch_04.csv', 'D'),
+        'sst_patch_05': ('sst/2019/sst_patch_05.csv', 'D'),
+        'sst_patch_06': ('sst/2019/sst_patch_06.csv', 'D'),
+        'sst_patch_07': ('sst/2019/sst_patch_07.csv', 'D'),
+        'sst_patch_08': ('sst/2019/sst_patch_08.csv', 'D'),
+        'sst_patch_09': ('sst/2019/sst_patch_09.csv', 'D'),
+        'sst_patch_10': ('sst/2019/sst_patch_10.csv', 'D'),
     }
     
     if dataset in paths:
