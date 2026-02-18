@@ -1,5 +1,6 @@
 # DyFFusion on NOAA OISSTv2 - Sea Surface Temperature
 # Single patch (60x60 = 3600 grid points as variates), daily frequency
+# Data spans all years 1981-2025 concatenated into one CSV.
 #
 # Usage:
 #   python run.py --config config/default/dyffusion.yaml --config config/sst/dyffusion_sst.yaml
