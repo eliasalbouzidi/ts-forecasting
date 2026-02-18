@@ -52,8 +52,8 @@ class ProbTSCli(LightningCLI):
             default="auto",
             help=(
                 "Metric to monitor for best checkpoint. "
-                "Use 'auto' (default) or a metric name like 'CRPS', 'weighted_ND', 'MASE', "
-                "'norm_CRPS', or full key like 'val_CRPS'."
+                "Use 'auto' (default: val_loss if validation exists, else train_loss) "
+                "or a default metric name like 'MAE' or 'MSE'."
             ),
         )
         parser.add_argument(
@@ -133,18 +133,12 @@ class ProbTSCli(LightningCLI):
         ]
         
         if not self.model.forecaster.no_training:
-            if self.datamodule.dataset_val is None:  # if the validation set is empty
-                monitor = "train_loss"
-            else:
-                # not using reweighting scheme for loss
-                if self.model.sampling_weight_scheme in ['none', 'fix']:
-                    monitor = 'val_CRPS'
-                else:
-                    monitor = 'val_weighted_ND'
+            has_val = self.datamodule.dataset_val is not None
+            monitor = "val_loss" if has_val else "train_loss"
             monitor = self._resolve_monitor_metric(
                 config_args.monitor_metric,
                 monitor,
-                has_val=self.datamodule.dataset_val is not None,
+                has_val=has_val,
             )
             
             # Set callbacks
