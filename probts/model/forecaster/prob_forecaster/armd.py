@@ -216,6 +216,8 @@ class ARMD(Forecaster):
     # -------------------------------------------------------
 
     def forecast(self, batch_data, num_samples=None):
+        # ARMD sampling path is deterministic (sigma=0), so enforce a single sample.
+        num_samples = 1
         past_target = batch_data.past_target_cdf
         
         # Initialize default scaling params
@@ -239,7 +241,7 @@ class ARMD(Forecaster):
         # Start with History (Final State X^T)
         curr_img = past_target[:, -self.prediction_length:, :]
         
-        if num_samples is not None and num_samples > 1:
+        if num_samples > 1:
             curr_img = repeat(curr_img, num_samples, dim=0)
 
         # Sampling Loop (Reverse Devolution Process)
@@ -293,9 +295,6 @@ class ARMD(Forecaster):
              else:
                  forecasts = forecasts * scale + loc
 
-        if num_samples is None: 
-            num_samples = 1
-            
         forecasts = forecasts.reshape(-1, num_samples, self.prediction_length, self.target_dim)
         
         return forecasts
