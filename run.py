@@ -69,11 +69,12 @@ class ProbTSCli(LightningCLI):
         self.run_config_paths = self._extract_run_config_paths(config_args)
         
         dl_suffix = "_dl" if getattr(self.datamodule.data_manager, "scaler_fit_on_full_data", False) else ""
+        backbone_tag = self._get_backbone_tag()
 
         if self.datamodule.data_manager.multi_hor:
             assert self.model.forecaster.name in MULTI_HOR_MODEL, f"Only support multi-horizon setting for {MULTI_HOR_MODEL}"
             
-            self.tag = "_".join([
+            tag_parts = [
                 self.datamodule.data_manager.dataset,
                 self.model.forecaster.name,
                 'TrainCTX','-'.join([str(i) for i in self.datamodule.data_manager.train_ctx_len_list]),
@@ -81,15 +82,21 @@ class ProbTSCli(LightningCLI):
                 'ValCTX','-'.join([str(i) for i in self.datamodule.data_manager.val_ctx_len_list]),
                 'ValPRED','-'.join([str(i) for i in self.datamodule.data_manager.val_pred_len_list]),
                 'seed' + str(config_args.seed_everything)
-            ]) + dl_suffix
+            ]
+            if backbone_tag is not None:
+                tag_parts.insert(2, backbone_tag)
+            self.tag = "_".join(tag_parts) + dl_suffix
         else:
-            self.tag = "_".join([
+            tag_parts = [
                 self.datamodule.data_manager.dataset,
                 self.model.forecaster.name,
                 'CTX' + str(self.datamodule.data_manager.context_length),
                 'PRED' + str(self.datamodule.data_manager.prediction_length),
                 'seed' + str(config_args.seed_everything)
-            ]) + dl_suffix
+            ]
+            if backbone_tag is not None:
+                tag_parts.insert(2, backbone_tag)
+            self.tag = "_".join(tag_parts) + dl_suffix
         
         log.info(f"Root dir is {self.trainer.default_root_dir}, exp tag is {self.tag}")
         
@@ -334,6 +341,17 @@ class ProbTSCli(LightningCLI):
                 if os.path.isfile(ckpt_path):
                     return ckpt_path
         return None
+
+    def _get_backbone_tag(self):
+        forecaster = getattr(self.model, "forecaster", None)
+        if forecaster is None:
+            return None
+        if getattr(forecaster, "name", "") != "ARMD":
+            return None
+        backbone_type = getattr(forecaster, "backbone_type", None)
+        if backbone_type is None:
+            return None
+        return f"BB{str(backbone_type).lower()}"
 
     def run(self):
         self.init_exp()

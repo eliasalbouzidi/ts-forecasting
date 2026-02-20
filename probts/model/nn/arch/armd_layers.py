@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from probts.model.nn.arch.decomp import series_decomp
 
 # --------------------------------------------------------------------------
 # Beta Schedules
@@ -103,4 +104,91 @@ class LinearBackbone(nn.Module):
         
         output = numerator / denominator
         
+        return output
+
+
+class DLinearBackbone(nn.Module):
+    def __init__(
+        self,
+        n_feat,
+        seq_len,
+        timesteps,
+        w_grad=True,
+        alphas_cumprod=None,
+        b_param=2.0,
+        c_param=-1.0,
+        d_param=0.5,
+        dlinear_kernel_size=25,
+        dlinear_individual=False,
+        **kwargs
+    ):
+        super().__init__()
+        self.n_feat = n_feat
+        self.seq_len = seq_len
+        self.individual = dlinear_individual
+
+        self.b_param = b_param
+        self.c_param = c_param
+        self.d_param = d_param
+
+        # DLinear-style decomposition: input = seasonal + trend
+        self.decomposition = series_decomp(dlinear_kernel_size)
+
+        if self.individual:
+            self.linear_seasonal = nn.ModuleList()
+            self.linear_trend = nn.ModuleList()
+            for _ in range(self.n_feat):
+                self.linear_seasonal.append(nn.Linear(seq_len, seq_len))
+                self.linear_trend.append(nn.Linear(seq_len, seq_len))
+        else:
+            self.linear_seasonal = nn.Linear(seq_len, seq_len)
+            self.linear_trend = nn.Linear(seq_len, seq_len)
+
+        if alphas_cumprod is None:
+            betas = linear_beta_schedule(timesteps)
+            alphas = 1. - betas
+            alphas_cumprod = torch.cumprod(alphas, dim=0)
+        else:
+            alphas_cumprod = alphas_cumprod.detach().clone()
+
+        self.w = nn.Parameter(alphas_cumprod.float(), requires_grad=w_grad)
+        self.register_buffer('w_dev', alphas_cumprod.float())
+
+    def _dlinear_distance(self, input_):
+        seasonal_init, trend_init = self.decomposition(input_)
+        seasonal_init = seasonal_init.permute(0, 2, 1)
+        trend_init = trend_init.permute(0, 2, 1)
+
+        if self.individual:
+            seasonal_out = torch.zeros(
+                seasonal_init.size(0), seasonal_init.size(1), self.seq_len,
+                dtype=seasonal_init.dtype, device=seasonal_init.device
+            )
+            trend_out = torch.zeros(
+                trend_init.size(0), trend_init.size(1), self.seq_len,
+                dtype=trend_init.dtype, device=trend_init.device
+            )
+            for i in range(self.n_feat):
+                seasonal_out[:, i, :] = self.linear_seasonal[i](seasonal_init[:, i, :])
+                trend_out[:, i, :] = self.linear_trend[i](trend_init[:, i, :])
+        else:
+            seasonal_out = self.linear_seasonal(seasonal_init)
+            trend_out = self.linear_trend(trend_init)
+
+        return (seasonal_out + trend_out).permute(0, 2, 1)
+
+    def forward(self, input_, t, training=True):
+        noise = torch.randn_like(input_)
+        if not training:
+            noise = 0
+
+        w_dev_t = extract(self.w_dev, t, input_.shape)
+        input_ = input_ + w_dev_t * noise
+
+        D = self._dlinear_distance(input_)
+
+        W_t = extract(self.w, t, input_.shape)
+        numerator = W_t * input_ + (1 - self.b_param * W_t) * D
+        denominator = (1 + self.c_param * W_t).pow(self.d_param) + 1e-8
+        output = numerator / denominator
         return output

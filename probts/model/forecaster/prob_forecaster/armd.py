@@ -8,7 +8,14 @@ from einops import reduce
 
 from probts.model.forecaster import Forecaster
 from probts.utils import repeat
-from probts.model.nn.arch.armd_layers import LinearBackbone, default, extract, linear_beta_schedule, cosine_beta_schedule
+from probts.model.nn.arch.armd_layers import (
+    LinearBackbone,
+    DLinearBackbone,
+    default,
+    extract,
+    linear_beta_schedule,
+    cosine_beta_schedule,
+)
 
 class ARMD(Forecaster):
     def __init__(
@@ -21,6 +28,9 @@ class ARMD(Forecaster):
             b_param: float = 2.0,
             c_param: float = -1.0,
             d_param: float = 0.5,
+            backbone_type: str = 'linear',
+            dlinear_kernel_size: int = 25,
+            dlinear_individual: bool = False,
             **kwargs
     ):
         super().__init__(**kwargs)
@@ -30,6 +40,7 @@ class ARMD(Forecaster):
         self.seq_length = self.prediction_length
         self.feature_size = self.target_dim
         self.loss_type = loss_type
+        self.backbone_type = str(backbone_type).lower()
 
         # -------------------------------------------------------
         # Diffusion Parameters
@@ -52,7 +63,7 @@ class ARMD(Forecaster):
         # -------------------------------------------------------
         # Initialize Backbone (Devolution Network R)
         # -------------------------------------------------------
-        self.model = LinearBackbone(
+        backbone_kwargs = dict(
             n_feat=self.feature_size,
             seq_len=self.seq_length,
             timesteps=self.prediction_length,
@@ -61,7 +72,20 @@ class ARMD(Forecaster):
             b_param=b_param,
             c_param=c_param,
             d_param=d_param
-        ) 
+        )
+        if self.backbone_type == 'linear':
+            self.model = LinearBackbone(**backbone_kwargs)
+        elif self.backbone_type == 'dlinear':
+            self.model = DLinearBackbone(
+                **backbone_kwargs,
+                dlinear_kernel_size=dlinear_kernel_size,
+                dlinear_individual=dlinear_individual
+            )
+        else:
+            raise ValueError(
+                f"Unsupported ARMD backbone_type '{backbone_type}'. "
+                "Supported: ['linear', 'dlinear']"
+            )
         
         # self.register_buffer ensures: Automatic Device Movement, State Dictionary saving, and No Gradients
         # Register the base schedules
