@@ -88,6 +88,7 @@ class ProbTSForecastModule(pl.LightningModule):
         if self.wandb_forecast_plot_view not in {"denorm", "norm", "both"}:
             self.wandb_forecast_plot_view = "both"
         self._test_plot_payload = None
+        self._wandb_model_size_logged = False
         
         # init the parapemetr for sampling
         self.sampling_weight_scheme = sampling_weight_scheme
@@ -117,6 +118,9 @@ class ProbTSForecastModule(pl.LightningModule):
         self.log("train_loss", loss, on_step=True, prog_bar=True, logger=False)
         self._log_metrics_all({"train_loss": float(loss.detach().cpu())})
         return loss
+
+    def on_fit_start(self):
+        self._log_model_size_to_wandb()
 
     def evaluate(self, batch, stage='',dataloader_idx=None):
         batch_data = ProbTSBatchData(batch, self.device)
@@ -213,6 +217,7 @@ class ProbTSForecastModule(pl.LightningModule):
         return metrics
 
     def on_test_epoch_start(self):
+        self._log_model_size_to_wandb()
         self.metrics_dict = {}
         self.hor_metrics = {}
         self.avg_metrics = {}
@@ -342,6 +347,34 @@ class ProbTSForecastModule(pl.LightningModule):
                 new_key = key
             formatted[new_key] = value
         return formatted
+
+    def _log_model_size_to_wandb(self):
+        if self._wandb_model_size_logged:
+            return
+        if not hasattr(self, "trainer") or self.trainer is None:
+            return
+
+        total_parameters = sum(p.numel() for p in self.parameters())
+        trainable_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+        for logger in self.trainer.loggers:
+            if not isinstance(logger, WandbLogger):
+                continue
+            try:
+                run = logger.experiment
+                run.summary["total_parameters"] = int(total_parameters)
+                run.summary["trainable_parameters"] = int(trainable_parameters)
+                logger.log_metrics(
+                    {
+                        "train/total_parameters": float(total_parameters),
+                        "train/trainable_parameters": float(trainable_parameters),
+                    },
+                    step=self._get_wandb_safe_step(logger),
+                )
+            except Exception:
+                pass
+
+        self._wandb_model_size_logged = True
 
     def _log_wandb_forecast_plots(self):
         if not self.wandb_log_forecast_plots or self._test_plot_payload is None:
