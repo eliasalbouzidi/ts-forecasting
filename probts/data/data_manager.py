@@ -206,13 +206,16 @@ class DataManager:
     def _load_short_term_dataset(self):
         """Load short-term dataset using GluonTS."""
         print(f"Loading Short-term Dataset: {self.dataset}")
-        self.dataset_raw = datasets.get_dataset(self.dataset, path=Path(self.path), regenerate=True)
+        self.dataset_raw = datasets.get_dataset(self.dataset, path=Path(self.path), regenerate=False)
         metadata = self.dataset_raw.metadata
         if self.is_univar_dataset:
             target_dim = 1
         else:
             target_dim = metadata.feat_static_cat[0].cardinality
-        self._set_meta_parameters(target_dim, metadata.freq.upper(), metadata.prediction_length)
+        # Respect user-configured prediction_length for short-term datasets when provided.
+        # If not provided, fall back to dataset metadata default.
+        prediction_length = self.prediction_length if self.prediction_length is not None else metadata.prediction_length
+        self._set_meta_parameters(target_dim, metadata.freq.upper(), prediction_length)
         self.prepare_STSF_dataset(self.dataset)
 
     def _set_meta_parameters(self, target_dim, freq, prediction_length):

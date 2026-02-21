@@ -11,6 +11,7 @@ from probts.utils import repeat
 from probts.model.nn.arch.armd_layers import (
     LinearBackbone,
     DLinearBackbone,
+    TSMixerBackbone,
     default,
     extract,
     linear_beta_schedule,
@@ -31,6 +32,12 @@ class ARMD(Forecaster):
             backbone_type: str = 'linear',
             dlinear_kernel_size: int = 25,
             dlinear_individual: bool = False,
+            tsmixer_n_blocks: int = 2,
+            tsmixer_hidden_dim: int = 128,
+            tsmixer_dropout: float = 0.1,
+            tsmixer_temporal_mlp_ratio: float = 2.0,
+            tsmixer_channel_mlp_ratio: float = 2.0,
+            tsmixer_activation: str = 'gelu',
             **kwargs
     ):
         super().__init__(**kwargs)
@@ -81,10 +88,20 @@ class ARMD(Forecaster):
                 dlinear_kernel_size=dlinear_kernel_size,
                 dlinear_individual=dlinear_individual
             )
+        elif self.backbone_type == 'tsmixer':
+            self.model = TSMixerBackbone(
+                **backbone_kwargs,
+                tsmixer_n_blocks=tsmixer_n_blocks,
+                tsmixer_hidden_dim=tsmixer_hidden_dim,
+                tsmixer_dropout=tsmixer_dropout,
+                tsmixer_temporal_mlp_ratio=tsmixer_temporal_mlp_ratio,
+                tsmixer_channel_mlp_ratio=tsmixer_channel_mlp_ratio,
+                tsmixer_activation=tsmixer_activation,
+            )
         else:
             raise ValueError(
                 f"Unsupported ARMD backbone_type '{backbone_type}'. "
-                "Supported: ['linear', 'dlinear']"
+                "Supported: ['linear', 'dlinear', 'tsmixer']"
             )
         
         # self.register_buffer ensures: Automatic Device Movement, State Dictionary saving, and No Gradients

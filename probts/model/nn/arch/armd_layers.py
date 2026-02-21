@@ -192,3 +192,137 @@ class DLinearBackbone(nn.Module):
         denominator = (1 + self.c_param * W_t).pow(self.d_param) + 1e-8
         output = numerator / denominator
         return output
+
+
+class _MixerMLP(nn.Module):
+    def __init__(self, in_dim, hidden_dim, dropout=0.1, activation="gelu"):
+        super().__init__()
+        if activation.lower() == "relu":
+            act = nn.ReLU()
+        else:
+            act = nn.GELU()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            act,
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, in_dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class _TSMixerBlock(nn.Module):
+    def __init__(
+        self,
+        seq_len,
+        n_feat,
+        hidden_dim=128,
+        temporal_mlp_ratio=2.0,
+        channel_mlp_ratio=2.0,
+        dropout=0.1,
+        activation="gelu",
+    ):
+        super().__init__()
+        temporal_hidden = max(int(seq_len * temporal_mlp_ratio), int(hidden_dim))
+        channel_hidden = max(int(n_feat * channel_mlp_ratio), int(hidden_dim))
+
+        self.temporal_norm = nn.LayerNorm(seq_len)
+        self.temporal_mlp = _MixerMLP(
+            in_dim=seq_len,
+            hidden_dim=temporal_hidden,
+            dropout=dropout,
+            activation=activation,
+        )
+
+        self.channel_norm = nn.LayerNorm(n_feat)
+        self.channel_mlp = _MixerMLP(
+            in_dim=n_feat,
+            hidden_dim=channel_hidden,
+            dropout=dropout,
+            activation=activation,
+        )
+
+    def forward(self, x):
+        # Temporal mixing on each variable independently.
+        t_in = x.permute(0, 2, 1)
+        t_out = self.temporal_mlp(self.temporal_norm(t_in))
+        x = x + t_out.permute(0, 2, 1)
+
+        # Channel mixing on each timestep independently.
+        c_out = self.channel_mlp(self.channel_norm(x))
+        x = x + c_out
+        return x
+
+
+class TSMixerBackbone(nn.Module):
+    def __init__(
+        self,
+        n_feat,
+        seq_len,
+        timesteps,
+        w_grad=True,
+        alphas_cumprod=None,
+        b_param=2.0,
+        c_param=-1.0,
+        d_param=0.5,
+        tsmixer_n_blocks=2,
+        tsmixer_hidden_dim=128,
+        tsmixer_dropout=0.1,
+        tsmixer_temporal_mlp_ratio=2.0,
+        tsmixer_channel_mlp_ratio=2.0,
+        tsmixer_activation="gelu",
+        **kwargs
+    ):
+        super().__init__()
+        self.b_param = b_param
+        self.c_param = c_param
+        self.d_param = d_param
+
+        self.blocks = nn.ModuleList(
+            [
+                _TSMixerBlock(
+                    seq_len=seq_len,
+                    n_feat=n_feat,
+                    hidden_dim=tsmixer_hidden_dim,
+                    temporal_mlp_ratio=tsmixer_temporal_mlp_ratio,
+                    channel_mlp_ratio=tsmixer_channel_mlp_ratio,
+                    dropout=tsmixer_dropout,
+                    activation=tsmixer_activation,
+                )
+                for _ in range(int(tsmixer_n_blocks))
+            ]
+        )
+
+        if alphas_cumprod is None:
+            betas = linear_beta_schedule(timesteps)
+            alphas = 1. - betas
+            alphas_cumprod = torch.cumprod(alphas, dim=0)
+        else:
+            alphas_cumprod = alphas_cumprod.detach().clone()
+
+        self.w = nn.Parameter(alphas_cumprod.float(), requires_grad=w_grad)
+        self.register_buffer('w_dev', alphas_cumprod.float())
+
+    def _tsmixer_distance(self, input_):
+        x = input_
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+    def forward(self, input_, t, training=True):
+        noise = torch.randn_like(input_)
+        if not training:
+            noise = 0
+
+        w_dev_t = extract(self.w_dev, t, input_.shape)
+        input_ = input_ + w_dev_t * noise
+
+        D = self._tsmixer_distance(input_)
+
+        W_t = extract(self.w, t, input_.shape)
+        numerator = W_t * input_ + (1 - self.b_param * W_t) * D
+        denominator = (1 + self.c_param * W_t).pow(self.d_param) + 1e-8
+        output = numerator / denominator
+        return output
