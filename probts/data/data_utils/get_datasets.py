@@ -38,7 +38,7 @@ def get_dataset_info(dataset, data_path=None, freq=None):
         'turkey_power': ('kaggle/power Generation and consumption.csv', 'H'),
         'istanbul_traffic': ('kaggle/istanbul_traffic.csv', 'H'),
         # SST patches (NOAA OISSTv2) — combined across all years (1981-2025)
-        'sst_patch_00': ('sst/2019/sst_patch_00.csv', 'D'),
+        'sst_patch_00': ('sst/sst_patch_00.csv', 'D'),
     }
     
     if dataset in paths:
