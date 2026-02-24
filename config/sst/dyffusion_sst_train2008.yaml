@@ -14,7 +14,7 @@ trainer:
   limit_train_batches: 1000
   log_every_n_steps: 10
   check_val_every_n_epoch: 1
-  default_root_dir: ./results
+  default_root_dir: ./results/sst_train2008
   
 model:
   forecaster:
