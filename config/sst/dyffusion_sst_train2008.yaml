@@ -20,23 +20,20 @@ model:
   forecaster:
     class_path: probts.model.forecaster.prob_forecaster.Dyffusion
     init_args:
-      # Dyffusion parameters
       training_stage: forecaster
       hidden_dim: 64
       num_layers: 1
       time_embed_dim: 32
       dropout: 0.1
-      num_diffusion_steps: 96
-      sampling_steps: 96
+      num_diffusion_steps: 7
+      sampling_steps: 7
       lookahead_loss: true
       condition_on_xt: false
       stochastic_interpolator: true
-      
       use_lags: false
       use_feat_idx_emb: false
       use_time_feat: false
       use_scaling: false
-      
   num_samples: 100
   learning_rate: 0.001
   quantiles_num: 20
@@ -52,14 +49,14 @@ data:
       
       # Context and prediction lengths - REDUCED for memory
       context_length: 64      # 64 days of history
-      prediction_length: 64   # 64 days forecast
+      prediction_length: 7   # 64 days forecast
       
       # Time split configuration
       train_ratio: 0.67       # ~1981-2008
       test_ratio: 0.21        # ~2017-2025
       # Validation: automatic (remaining ~8 years)
       
-  batch_size: 32        # Was 128 - reduced for GPU memory
-  test_batch_size: 16   # Was 64 - reduced for GPU memory
-  num_workers: 2
+  batch_size: 16        # Was 128 - reduced for GPU memory
+  test_batch_size: 8   # Was 64 - reduced for GPU memory
+  num_workers: 4
 
