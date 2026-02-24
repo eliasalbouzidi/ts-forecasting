@@ -1,0 +1,69 @@
+# Alternative: Dyffusion on SST with explicit year-based splitting via code
+# Note: This config structure is for reference. The actual year-based split would need
+# custom preprocessing or a small modification to DataManager.
+
+seed_everything: 1
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 50
+  use_distributed_sampler: false
+  limit_train_batches: 2000
+  log_every_n_steps: 1
+  check_val_every_n_epoch: 1
+  default_root_dir: ./results
+  
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.Dyffusion
+    init_args:
+      training_stage: forecaster
+      hidden_dim: 128
+      num_layers: 2
+      time_embed_dim: 64
+      dropout: 0.1
+      num_diffusion_steps: 96
+      sampling_steps: 96
+      lookahead_loss: true
+      condition_on_xt: false
+      stochastic_interpolator: true
+      
+      use_lags: false
+      use_feat_idx_emb: false
+      use_time_feat: false
+      use_scaling: false
+      
+  num_samples: 100
+  learning_rate: 0.001
+  quantiles_num: 20
+  
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: sst
+      path: ./datasets
+      data_path: ./datasets/sst/sst_patch_00.csv
+      
+      # SST Data has ~16340 days (1981-2025 with gaps)
+      # Approximate splits:
+      # Train: 1981-2008 (~10240 days, 62.7%)
+      # Val:   2009-2016 (~2920 days, 17.9%)
+      # Test:  2017-2025 (~3180 days, 19.4%)
+      
+      split_val: true
+      train_ratio: 0.627    # 1981-2008
+      test_ratio: 0.194     # 2017-2025
+      # Val is automatic: 0.179 (2009-2016)
+      
+      context_length: 96
+      prediction_length: 96
+      
+      scaler: standard
+      scaler_fit_on_full_data: false
+      freq: 'D'
+      
+  batch_size: 128
+  test_batch_size: 64
+  num_workers: 2
