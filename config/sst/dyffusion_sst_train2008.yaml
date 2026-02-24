@@ -47,7 +47,7 @@ data:
     init_args:
       dataset: sst
       path: ./datasets
-      data_path: ./datasets/sst/sst_patch_00.csv
+      data_path: sst/sst_patch_00.csv
       
       # Time split configuration
       split_val: true

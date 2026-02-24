@@ -44,7 +44,7 @@ data:
     init_args:
       dataset: sst
       path: ./datasets
-      data_path: ./datasets/sst/sst_patch_00.csv
+      data_path: sst/sst_patch_00.csv
       
       # SST Data has ~16340 days (1981-2025 with gaps)
       # Approximate splits:
