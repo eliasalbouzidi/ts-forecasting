@@ -1,5 +1,5 @@
-# Dyffusion on SST dataset: Train until 2008, Val+Test after 2008
-# This config runs Dyffusion classique (no autoencoder) on the SST patch data
+# Dyffusion on SST dataset: Train until 2008, Val+Test after 2008 - LITE VERSION
+# Optimized for GPU memory constraints
 # Training: 1981-2008 (28 years)
 # Validation: 2009-2016 (8 years)  
 # Test: 2017-2025 (9 years, with 2019-2022 missing)
@@ -11,8 +11,8 @@ trainer:
   strategy: auto
   max_epochs: 50
   use_distributed_sampler: false
-  limit_train_batches: 2000
-  log_every_n_steps: 1
+  limit_train_batches: 1000
+  log_every_n_steps: 10
   check_val_every_n_epoch: 1
   default_root_dir: ./results
   
@@ -22,9 +22,9 @@ model:
     init_args:
       # Dyffusion parameters
       training_stage: forecaster
-      hidden_dim: 128
-      num_layers: 2
-      time_embed_dim: 64
+      hidden_dim: 64
+      num_layers: 1
+      time_embed_dim: 32
       dropout: 0.1
       num_diffusion_steps: 96
       sampling_steps: 96
@@ -55,15 +55,16 @@ data:
       test_ratio: 0.21    # ~2017-2025 (9 years)
       # Validation: automatic (remaining ~8 years, 2009-2016)
       
-      # Context and prediction lengths
-      context_length: 96      # 96 days of history
-      prediction_length: 96   # 96 days forecast
+      # Context and prediction lengths - REDUCED for memory
+      context_length: 64      # Was 96
+      prediction_length: 64   # Was 96
       
       # Scaler configuration
       scaler: standard
       scaler_fit_on_full_data: false  # Only fit on training data (no leakage)
       freq: 'D'
       
-  batch_size: 128
-  test_batch_size: 64
+  batch_size: 32        # Was 128 - reduced for GPU memory
+  test_batch_size: 16   # Was 64 - reduced for GPU memory
   num_workers: 2
+
