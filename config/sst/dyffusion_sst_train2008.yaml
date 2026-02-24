@@ -45,24 +45,19 @@ data:
   data_manager:
     class_path: probts.data.data_manager.DataManager
     init_args:
-      dataset: sst
-      path: ./datasets
-      data_path: sst/sst_patch_00.csv
-      
-      # Time split configuration
+      dataset: sst_patch_00
       split_val: true
-      train_ratio: 0.67   # ~1981-2008 (28 years out of 42)
-      test_ratio: 0.21    # ~2017-2025 (9 years)
-      # Validation: automatic (remaining ~8 years, 2009-2016)
+      scaler: standard
+      scaler_fit_on_full_data: false
       
       # Context and prediction lengths - REDUCED for memory
-      context_length: 64      # Was 96
-      prediction_length: 64   # Was 96
+      context_length: 64      # 64 days of history
+      prediction_length: 64   # 64 days forecast
       
-      # Scaler configuration
-      scaler: standard
-      scaler_fit_on_full_data: false  # Only fit on training data (no leakage)
-      freq: 'D'
+      # Time split configuration
+      train_ratio: 0.67       # ~1981-2008
+      test_ratio: 0.21        # ~2017-2025
+      # Validation: automatic (remaining ~8 years)
       
   batch_size: 32        # Was 128 - reduced for GPU memory
   test_batch_size: 16   # Was 64 - reduced for GPU memory
