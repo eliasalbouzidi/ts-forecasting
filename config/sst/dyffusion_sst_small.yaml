@@ -45,14 +45,14 @@ data:
   data_manager:
     class_path: probts.data.data_manager.DataManager
     init_args:
-      dataset: sst_patch_00
+      dataset: sst_patch_00_small
       split_val: true
       scaler: standard
       scaler_fit_on_full_data: false
       context_length: 64          # 64-day context window (paper: 64 timesteps)
       prediction_length: 7        # forecast 1-7 days ahead
-      train_ratio: 0.9549
-      test_ratio: 0.0225
-  batch_size: 8                  # smaller batch for large target_dim (3600)
-  test_batch_size: 4
-  num_workers: 1
+      train_ratio: 0.7
+      test_ratio: 0.2
+  batch_size: 16                  # smaller batch for large target_dim (3600)
+  test_batch_size: 8
+  num_workers: 4

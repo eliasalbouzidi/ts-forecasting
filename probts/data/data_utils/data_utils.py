@@ -115,11 +115,12 @@ def get_rolling_test(stage, test_set, border_begin_idx, border_end_idx, rolling_
     print(f"{stage}  pred_len: {pred_len} : num_test_windows: {num_test_windows}")
 
     test_set = next(iter(test_set))
-    rolling_test_seq_list = list()
+    full_target = test_set[FieldName.TARGET]
+    rolling_test_seq_list = []
     for i in range(num_test_windows):
-        rolling_test_seq = deepcopy(test_set)
         rolling_end = border_begin_idx + pred_len + i * rolling_length
-        rolling_test_seq[FieldName.TARGET] = rolling_test_seq[FieldName.TARGET][:, :rolling_end]
+        rolling_test_seq = dict(test_set)
+        rolling_test_seq[FieldName.TARGET] = full_target[:, :rolling_end]
         rolling_test_seq_list.append(rolling_test_seq)
 
     rolling_test_set = ListDataset(
