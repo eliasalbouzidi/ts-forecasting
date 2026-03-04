@@ -6,6 +6,7 @@ from .csdi import CSDI
 from .tsdiff import TSDiffCond
 from .armd import ARMD
 from .dyffusion import Dyffusion
+from .dyffusion_ae import DyffusionAE
 from .dydiff import Dydiff
 # ------- add lag_llama to sys.path ---------
 try:
