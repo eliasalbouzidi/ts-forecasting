@@ -31,6 +31,6 @@ else:
 
 # Save the small dataset
 os.makedirs('datasets/sst', exist_ok=True)
-df_small.to_csv('datasets/sst/sst_small.csv', index=False)
+df_small.to_csv('datasets/sst/sst_patch_00.csv', index=False)
 print(f"\nSmall dataset shape: {df_small.shape}")
-print(f"Saved to: datasets/sst/sst_small.csv")
+print(f"Saved to: datasets/sst/sst_patch_00.csv")
