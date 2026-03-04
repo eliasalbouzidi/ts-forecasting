@@ -12,24 +12,23 @@ trainer:
   default_root_dir: ./results
 model:
   forecaster:
-    class_path: probts.model.forecaster.prob_forecaster.Dyffusion
+    class_path: probts.model.forecaster.prob_forecaster.DyffusionAE
     init_args:
-      # Stage 1: set training_stage=interpolator
-      # Stage 2: set training_stage=forecaster (paper default)
-      training_stage: forecaster
+      # AutoEncoder parameters
+      latent_dim: 16
+      encoder_hidden_dim: 128
+      decoder_hidden_dim: 128
+      # Dyffusion parameters
       hidden_dim: 128
       num_layers: 2
       time_embed_dim: 64
       dropout: 0.1
       num_diffusion_steps: 96   # N = h
       sampling_steps: 96        # use full schedule at inference
+      training_stage: forecaster
       lookahead_loss: true      # Eq. (3) + look-ahead
       condition_on_xt: false
       stochastic_interpolator: true
-      use_lags: false
-      use_feat_idx_emb: false
-      use_time_feat: false
-      use_scaling: false
   num_samples: 50
   learning_rate: 0.001
   quantiles_num: 20
