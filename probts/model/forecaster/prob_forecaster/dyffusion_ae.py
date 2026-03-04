@@ -359,9 +359,22 @@ class DyffusionAE(Forecaster):
             interp_curr = self._interpolate(z_t, z_th_pred, i_n)
             s_n = interp_next - interp_curr + s_n
 
-        # Decode prediction back to original space
-        forecasts = z_th_pred.unsqueeze(1)  # [B, 1, latent_dim]
-        forecasts_decoded = self._decode(forecasts)  # [B, 1, target_dim]
+        # Generate forecasts for all horizons (like Dyffusion does)
+        if self.horizon == 1:
+            z_forecasts = z_th_pred.unsqueeze(1)
+        else:
+            j_idx = torch.arange(1, self.horizon, device=device).float()
+            j_rep = j_idx.unsqueeze(0).repeat(z_t.shape[0], 1).reshape(-1)
+            z_t_rep = z_t.repeat_interleave(self.horizon - 1, dim=0)
+            z_th_rep = z_th_pred.repeat_interleave(self.horizon - 1, dim=0)
+            z_tj = self._interpolate(z_t_rep, z_th_rep, j_rep).view(
+                z_t.shape[0], self.horizon - 1, self.latent_dim
+            )
+            z_forecasts = torch.cat([z_tj, z_th_pred.unsqueeze(1)], dim=1)
+
+        # Decode from latent space back to original space
+        # z_forecasts is [B, horizon, latent_dim] or [B*num_samples, horizon, latent_dim]
+        forecasts = self._decode(z_forecasts)  # [B*num_samples, horizon, target_dim]
         
-        forecasts_decoded = forecasts_decoded.view(-1, num_samples, 1, self.target_dim)
-        return forecasts_decoded
+        forecasts = forecasts.view(-1, num_samples, self.horizon, self.target_dim)
+        return forecasts
