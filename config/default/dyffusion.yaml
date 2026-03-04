@@ -45,4 +45,4 @@ data:
       prediction_length: 96
   batch_size: 2
   test_batch_size: 1
-  num_workers: 0
+  num_workers: 1
