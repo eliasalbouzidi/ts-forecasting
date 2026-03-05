@@ -201,8 +201,12 @@ class DyffusionAE(Forecaster):
         x, y, x_mark, y_mark = batch
 
         # Encode to latent space
-        z_t = self._encode(x)  # [B, context_length, latent_dim]
-        z_th = self._encode(y)  # [B, prediction_length, latent_dim]
+        z_t_full = self._encode(x)  # [B, context_length, latent_dim]
+        z_th_full = self._encode(y)  # [B, prediction_length, latent_dim]
+        
+        # Use last timestep for forecasting in diffusion model
+        z_t = z_t_full[:, -1, :]  # [B, latent_dim]
+        z_th = z_th_full[:, -1, :]  # [B, latent_dim]
 
         schedule = self._build_schedule(
             self.num_diffusion_steps if self.training_stage == "interpolator" else 100,
@@ -210,12 +214,14 @@ class DyffusionAE(Forecaster):
         )
 
         if self.training_stage == "interpolator":
+            # Use linear interpolation as ground truth, not the network's own output
             z_ti_list = [z_t]
             for i_idx in range(1, schedule.shape[0]):
-                t_norm = self._normalize_time(torch.tensor(i_idx, device=z_t.device))
-                z_ti = self._interpolate(z_t, z_th, torch.tensor(i_idx, device=z_t.device))
+                # Linear interpolation: z_ti = (1 - alpha) * z_t + alpha * z_th
+                alpha = float(i_idx) / float(schedule.shape[0] - 1)
+                z_ti = (1 - alpha) * z_t + alpha * z_th
                 z_ti_list.append(z_ti)
-            z_ti = torch.stack(z_ti_list, dim=1)
+            z_ti = torch.stack(z_ti_list, dim=1)  # [B, num_interp_steps, latent_dim]
 
             i_idx = torch.arange(
                 1, z_ti.shape[1], dtype=z_t.dtype, device=z_t.device
@@ -232,15 +238,22 @@ class DyffusionAE(Forecaster):
         x, y, x_mark, y_mark = batch
 
         # Encode to latent space
-        z_t = self._encode(x)
-        z_th = self._encode(y)
+        z_t_full = self._encode(x)  # [B, context_length, latent_dim]
+        z_th_full = self._encode(y)  # [B, prediction_length, latent_dim]
+        
+        # Use last timestep for forecasting in diffusion model
+        z_t = z_t_full[:, -1, :]  # [B, latent_dim]
+        z_th = z_th_full[:, -1, :]  # [B, latent_dim]
 
         schedule = self._build_schedule(self.num_diffusion_steps, z_t.device)
 
         if self.training_stage == "interpolator":
+            # Use linear interpolation as ground truth
             z_ti_list = [z_t]
             for i_idx in range(1, schedule.shape[0]):
-                z_ti = self._interpolate(z_t, z_th, torch.tensor(i_idx, device=z_t.device))
+                # Linear interpolation: z_ti = (1 - alpha) * z_t + alpha * z_th
+                alpha = float(i_idx) / float(schedule.shape[0] - 1)
+                z_ti = (1 - alpha) * z_t + alpha * z_th
                 z_ti_list.append(z_ti)
             z_ti = torch.stack(z_ti_list, dim=1)
 
@@ -285,8 +298,12 @@ class DyffusionAE(Forecaster):
     def loss(self, batch_data):
         """Compute loss in latent space"""
         # Encode batch data to latent space
-        z_t = self._encode(batch_data.past_target_cdf[:, -1, :])  # [B, latent_dim]
-        z_th = self._encode(batch_data.future_target_cdf[:, -1, :])  # [B, latent_dim]
+        z_t_full = self._encode(batch_data.past_target_cdf)  # [B, context_length, latent_dim]
+        z_th_full = self._encode(batch_data.future_target_cdf)  # [B, prediction_length, latent_dim]
+        
+        # Use last timestep of context for forecasting
+        z_t = z_t_full[:, -1, :]  # [B, latent_dim]
+        z_th = z_th_full[:, -1, :]  # [B, latent_dim]
 
         schedule = self._build_schedule(self.num_diffusion_steps, z_t.device)
 
@@ -300,10 +317,16 @@ class DyffusionAE(Forecaster):
             if self.horizon < 2:
                 return torch.zeros((), device=z_t.device)
 
+            # Sample random interpolation indices for this batch
             i_idx = torch.randint(1, self.horizon, (z_t.shape[0],), device=z_t.device).float()
-            # For interpolator stage, we need intermediate points
-            # For simplicity, we'll use the endpoints
-            loss = self._stage1_interpolator_loss(z_t, z_th, z_th, i_idx)
+            
+            # Compute true interpolation targets using linear interpolation
+            alpha = i_idx / float(self.horizon)  # Normalize to [0, 1]
+            alpha = alpha.unsqueeze(-1)  # [B, 1]
+            z_ti_true = (1 - alpha) * z_t.unsqueeze(1) + alpha * z_th.unsqueeze(1)  # [B, 1, latent_dim]
+            z_ti_true = z_ti_true.squeeze(1)  # [B, latent_dim]
+            
+            loss = self._stage1_interpolator_loss(z_t, z_th, z_ti_true, i_idx)
             return loss.mean()
 
         if stage == "forecaster":
@@ -331,7 +354,10 @@ class DyffusionAE(Forecaster):
 
     def forecast(self, batch_data, num_samples=None):
         """Forecast in latent space then decode"""
-        z_t = self._encode(batch_data.past_target_cdf[:, -1, :])  # [B, latent_dim]
+        # Encode full context sequence for richness
+        z_t_full = self._encode(batch_data.past_target_cdf)  # [B, context_length, latent_dim]
+        # Use last timestep of context for forecasting
+        z_t = z_t_full[:, -1, :]  # [B, latent_dim]
         
         if num_samples is None:
             num_samples = 1
@@ -339,42 +365,44 @@ class DyffusionAE(Forecaster):
             z_t = z_t.repeat_interleave(num_samples, dim=0)
 
         device = z_t.device
-        schedule = self._build_schedule(self.sampling_steps, device)
-
-        if self.stochastic_interpolator:
-            self.interpolator.train()
-        else:
-            self.interpolator.eval()
-        self.forecaster.eval()
-
-        s_n = z_t
-        z_th_pred = None
-        for n in range(schedule.shape[0]):
-            i_n = schedule[n].expand(z_t.shape[0])
-            z_th_pred = self._forecast(s_n, i_n, z_t=z_t)
-            if n + 1 >= schedule.shape[0]:
-                break
-            i_next = schedule[n + 1].expand(z_t.shape[0])
-            interp_next = self._interpolate(z_t, z_th_pred, i_next)
-            interp_curr = self._interpolate(z_t, z_th_pred, i_n)
-            s_n = interp_next - interp_curr + s_n
-
-        # Generate forecasts for all horizons (like Dyffusion does)
-        if self.horizon == 1:
-            z_forecasts = z_th_pred.unsqueeze(1)
-        else:
-            j_idx = torch.arange(1, self.horizon, device=device).float()
-            j_rep = j_idx.unsqueeze(0).repeat(z_t.shape[0], 1).reshape(-1)
-            z_t_rep = z_t.repeat_interleave(self.horizon - 1, dim=0)
-            z_th_rep = z_th_pred.repeat_interleave(self.horizon - 1, dim=0)
-            z_tj = self._interpolate(z_t_rep, z_th_rep, j_rep).view(
-                z_t.shape[0], self.horizon - 1, self.latent_dim
-            )
-            z_forecasts = torch.cat([z_tj, z_th_pred.unsqueeze(1)], dim=1)
-
-        # Decode from latent space back to original space
-        # z_forecasts is [B, horizon, latent_dim] or [B*num_samples, horizon, latent_dim]
-        forecasts = self._decode(z_forecasts)  # [B*num_samples, horizon, target_dim]
+        bsz = z_t.shape[0]
         
-        forecasts = forecasts.view(-1, num_samples, self.horizon, self.target_dim)
+        self.forecaster.eval()
+        self.interpolator.eval()
+        
+        # Step 1: Predict final timestep z_th_pred from z_t
+        # Use multiple iterations to refine the prediction
+        z_th_pred = z_t.clone()
+        schedule = self._build_schedule(self.sampling_steps, device)
+        
+        for step_idx in range(len(schedule) - 1):
+            t_curr = schedule[step_idx]
+            t_next = schedule[step_idx + 1]
+            
+            # Predict next point
+            z_next = self._forecast(z_th_pred, t_next.expand(bsz), z_t=z_t)
+            z_th_pred = z_next
+
+        # Step 2: Generate full trajectory by interpolating between z_t and z_th_pred
+        # For each horizon h=1..H, generate z_(t+h)
+        z_forecasts_list = []
+        
+        for h in range(1, self.horizon + 1):
+            t_norm = float(h) / float(self.horizon)
+            t_tensor = torch.tensor(h, device=device, dtype=torch.float32)
+            
+            # Interpolate between z_t and z_th_pred at time h
+            z_h = self._interpolate(z_t, z_th_pred, t_tensor.expand(bsz))
+            z_forecasts_list.append(z_h)
+        
+        z_forecasts = torch.stack(z_forecasts_list, dim=1)  # [B, horizon, latent_dim]
+        
+        # Step 3: Decode back to original space
+        forecasts = self._decode(z_forecasts)  # [B, horizon, target_dim]
+        
+        if num_samples > 1:
+            forecasts = forecasts.view(-1, num_samples, self.horizon, self.target_dim)
+        else:
+            forecasts = forecasts.unsqueeze(1)
+        
         return forecasts

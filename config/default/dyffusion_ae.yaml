@@ -36,7 +36,7 @@ data:
   data_manager:
     class_path: probts.data.data_manager.DataManager
     init_args:
-      dataset: etth1
+      dataset: sst_patch_00
       split_val: true
       scaler: standard
       scaler_fit_on_full_data: true
