@@ -281,3 +281,100 @@ class DyffusionAE(Forecaster):
         x_samples = self._decode(z_samples)  # [num_sample, B, prediction_length, target_dim]
 
         return x_samples
+
+    def loss(self, batch_data):
+        """Compute loss in latent space"""
+        # Encode batch data to latent space
+        z_t = self._encode(batch_data.past_target_cdf[:, -1, :])  # [B, latent_dim]
+        z_th = self._encode(batch_data.future_target_cdf[:, -1, :])  # [B, latent_dim]
+
+        schedule = self._build_schedule(self.num_diffusion_steps, z_t.device)
+
+        stage = self.training_stage.lower()
+        if stage == "interpolator":
+            self._set_requires_grad(self.interpolator, True)
+            self._set_requires_grad(self.forecaster, False)
+            self.interpolator.train()
+            self.forecaster.eval()
+
+            if self.horizon < 2:
+                return torch.zeros((), device=z_t.device)
+
+            i_idx = torch.randint(1, self.horizon, (z_t.shape[0],), device=z_t.device).float()
+            # For interpolator stage, we need intermediate points
+            # For simplicity, we'll use the endpoints
+            loss = self._stage1_interpolator_loss(z_t, z_th, z_th, i_idx)
+            return loss.mean()
+
+        if stage == "forecaster":
+            self._set_requires_grad(self.interpolator, False)
+            self._set_requires_grad(self.forecaster, True)
+            self.forecaster.train()
+            loss = self._stage2_forecaster_loss(z_t, z_th, schedule)
+            return loss.mean()
+
+        if stage == "joint":
+            self._set_requires_grad(self.interpolator, True)
+            self._set_requires_grad(self.forecaster, True)
+            self.interpolator.train()
+            self.forecaster.train()
+
+            if self.horizon < 2:
+                return self._stage2_forecaster_loss(z_t, z_th, schedule).mean()
+
+            i_idx = torch.randint(1, self.horizon, (z_t.shape[0],), device=z_t.device).float()
+            loss_interp = self._stage1_interpolator_loss(z_t, z_th, z_th, i_idx)
+            loss_forecast = self._stage2_forecaster_loss(z_t, z_th, schedule)
+            return (loss_interp + loss_forecast).mean()
+
+        raise ValueError(f"Unknown training_stage: {self.training_stage}")
+
+    def forecast(self, batch_data, num_samples=None):
+        """Forecast in latent space then decode"""
+        z_t = self._encode(batch_data.past_target_cdf[:, -1, :])  # [B, latent_dim]
+        
+        if num_samples is None:
+            num_samples = 1
+        if num_samples > 1:
+            z_t = z_t.repeat_interleave(num_samples, dim=0)
+
+        device = z_t.device
+        schedule = self._build_schedule(self.sampling_steps, device)
+
+        if self.stochastic_interpolator:
+            self.interpolator.train()
+        else:
+            self.interpolator.eval()
+        self.forecaster.eval()
+
+        s_n = z_t
+        z_th_pred = None
+        for n in range(schedule.shape[0]):
+            i_n = schedule[n].expand(z_t.shape[0])
+            z_th_pred = self._forecast(s_n, i_n, z_t=z_t)
+            if n + 1 >= schedule.shape[0]:
+                break
+            i_next = schedule[n + 1].expand(z_t.shape[0])
+            interp_next = self._interpolate(z_t, z_th_pred, i_next)
+            interp_curr = self._interpolate(z_t, z_th_pred, i_n)
+            s_n = interp_next - interp_curr + s_n
+
+        # Generate forecasts for all horizons (like Dyffusion does)
+        if self.horizon == 1:
+            z_forecasts = z_th_pred.unsqueeze(1)
+        else:
+            j_idx = torch.arange(1, self.horizon, device=device).float()
+            j_rep = j_idx.unsqueeze(0).repeat(z_t.shape[0], 1).reshape(-1)
+            z_t_rep = z_t.repeat_interleave(self.horizon - 1, dim=0)
+            z_th_rep = z_th_pred.repeat_interleave(self.horizon - 1, dim=0)
+            z_tj = self._interpolate(z_t_rep, z_th_rep, j_rep).view(
+                z_t.shape[0], self.horizon - 1, self.latent_dim
+            )
+            z_forecasts = torch.cat([z_tj, z_th_pred.unsqueeze(1)], dim=1)
+
+        # Decode from latent space back to original space
+        # z_forecasts is [B, horizon, latent_dim] or [B*num_samples, horizon, latent_dim]
+        forecasts = self._decode(z_forecasts)  # [B*num_samples, horizon, target_dim]
+        
+        forecasts = forecasts.view(-1, num_samples, self.horizon, self.target_dim)
+        return forecasts
