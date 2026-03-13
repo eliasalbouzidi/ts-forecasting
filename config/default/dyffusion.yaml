@@ -43,6 +43,6 @@ data:
       scaler_fit_on_full_data: true
       context_length: 96
       prediction_length: 96
-  batch_size: 2
-  test_batch_size: 1
-  num_workers: 0
+  batch_size: 64
+  test_batch_size: 16
+  num_workers: 1
