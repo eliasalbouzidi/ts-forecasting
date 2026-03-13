@@ -83,6 +83,7 @@ class DyffusionTemporalAE(Forecaster):
         ae_pred_weight: float = 1.0,
         latent_align_weight: float = 1.0,
         dyffusion_weight: float = 1.0,
+        endpoint_ae_weight: float = 1.0,
         encoder_context_length: int = None,
         **kwargs,
     ):
@@ -105,6 +106,7 @@ class DyffusionTemporalAE(Forecaster):
         self.ae_pred_weight = float(ae_pred_weight)
         self.latent_align_weight = float(latent_align_weight)
         self.dyffusion_weight = float(dyffusion_weight)
+        self.endpoint_ae_weight = float(endpoint_ae_weight)
 
         self.horizon = int(self.prediction_length)
         self.num_diffusion_steps = int(num_diffusion_steps or self.horizon)
@@ -254,11 +256,16 @@ class DyffusionTemporalAE(Forecaster):
         recon_window = self._decode_temporal_window(z_t_k)
         recon_loss = F.mse_loss(recon_window, past_window)
 
+        # Ensure point encoder/decoder does not collapse to a near-constant mapping.
+        x_th_recon_true = self._decode_point(z_th_true_k)
+        endpoint_ae_loss = F.mse_loss(x_th_recon_true, x_th_true)
+
         schedule = self._build_schedule(self.num_diffusion_steps, z_t.device)
         dyffusion_loss = self._dyffusion_loss(z_t, z_th_true, schedule)
 
-        i0 = torch.zeros(z_t.shape[0], device=z_t.device)
-        z_th_pred = self._forecast(z_t, i0, z_t=z_t)
+        # Supervise endpoint prediction at i=h-1 to match inference target x_{t+h}.
+        i_h = torch.full((z_t.shape[0],), float(self.horizon - 1), device=z_t.device)
+        z_th_pred = self._forecast(z_t, i_h, z_t=z_t)
         z_th_pred_k = self._unflatten_latent(z_th_pred)
         x_th_pred = self._decode_point(z_th_pred_k)
 
@@ -267,6 +274,7 @@ class DyffusionTemporalAE(Forecaster):
 
         total_loss = (
             self.ae_recon_weight * recon_loss
+            + self.endpoint_ae_weight * endpoint_ae_loss
             + self.dyffusion_weight * dyffusion_loss
             + self.ae_pred_weight * pred_loss
             + self.latent_align_weight * latent_align_loss

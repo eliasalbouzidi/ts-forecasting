@@ -16,7 +16,7 @@ model:
     init_args:
       # Stage 1: set training_stage=interpolator
       # Stage 2: set training_stage=forecaster (paper default)
-      training_stage: forecaster
+      training_stage: joint
       hidden_dim: 128
       num_layers: 2
       time_embed_dim: 64
