@@ -85,6 +85,7 @@ class DyffusionTemporalAE(Forecaster):
         dyffusion_weight: float = 1.0,
         endpoint_ae_weight: float = 1.0,
         horizon_pred_weight: float = 1.0,
+        boundary_cont_weight: float = 1.0,
         encoder_context_length: int = None,
         **kwargs,
     ):
@@ -109,6 +110,7 @@ class DyffusionTemporalAE(Forecaster):
         self.dyffusion_weight = float(dyffusion_weight)
         self.endpoint_ae_weight = float(endpoint_ae_weight)
         self.horizon_pred_weight = float(horizon_pred_weight)
+        self.boundary_cont_weight = float(boundary_cont_weight)
 
         self.horizon = int(self.prediction_length)
         self.num_diffusion_steps = int(num_diffusion_steps or self.horizon)
@@ -267,6 +269,7 @@ class DyffusionTemporalAE(Forecaster):
 
     def loss(self, batch_data):
         past_window = batch_data.past_target_cdf[:, -self.encoder_context_length :, :]
+        x_t_last = batch_data.past_target_cdf[:, -1, :]
         x_th_true = batch_data.future_target_cdf[:, -1, :]
 
         z_t_k = self._encode_temporal_window(past_window)
@@ -293,6 +296,7 @@ class DyffusionTemporalAE(Forecaster):
         pred_loss = F.mse_loss(x_th_pred, x_th_true)
         latent_align_loss = F.mse_loss(z_th_pred, z_th_true)
         horizon_pred_loss = F.mse_loss(horizon_pred, future_true)
+        boundary_cont_loss = F.mse_loss(horizon_pred[:, 0, :], x_t_last)
 
         total_loss = (
             self.ae_recon_weight * recon_loss
@@ -301,6 +305,7 @@ class DyffusionTemporalAE(Forecaster):
             + self.ae_pred_weight * pred_loss
             + self.latent_align_weight * latent_align_loss
             + self.horizon_pred_weight * horizon_pred_loss
+            + self.boundary_cont_weight * boundary_cont_loss
         )
         return total_loss
 
