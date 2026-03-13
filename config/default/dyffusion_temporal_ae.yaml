@@ -1,0 +1,57 @@
+# lightning==2.3.0.dev0
+seed_everything: 1
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 5
+  use_distributed_sampler: false
+  limit_train_batches: 100
+  log_every_n_steps: 1
+  check_val_every_n_epoch: 1
+  default_root_dir: ./results
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.DyffusionTemporalAE
+    init_args:
+      hidden_dim: 256
+      num_layers: 2
+      time_embed_dim: 64
+      dropout: 0.1
+      num_diffusion_steps: 96
+      sampling_steps: 96
+      lookahead_loss: true
+      condition_on_xt: false
+      stochastic_interpolator: true
+
+      # Temporal autoencoder setup
+      encoder_context_length: 96
+      latent_dim_per_var: 8
+      temporal_encoder_hidden_dim: 128
+
+      # Weighted multi-loss objective
+      ae_recon_weight: 1.0
+      dyffusion_weight: 1.0
+      ae_pred_weight: 1.0
+      latent_align_weight: 1.0
+
+      use_lags: false
+      use_feat_idx_emb: false
+      use_time_feat: false
+      use_scaling: false
+  num_samples: 10
+  learning_rate: 0.001
+  quantiles_num: 20
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: etth1
+      split_val: true
+      scaler: standard
+      scaler_fit_on_full_data: true
+      context_length: 96
+      prediction_length: 96
+  batch_size: 64
+  test_batch_size: 16
+  num_workers: 1
