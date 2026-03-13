@@ -84,6 +84,7 @@ class DyffusionTemporalAE(Forecaster):
         latent_align_weight: float = 1.0,
         dyffusion_weight: float = 1.0,
         endpoint_ae_weight: float = 1.0,
+        horizon_pred_weight: float = 1.0,
         encoder_context_length: int = None,
         **kwargs,
     ):
@@ -107,6 +108,7 @@ class DyffusionTemporalAE(Forecaster):
         self.latent_align_weight = float(latent_align_weight)
         self.dyffusion_weight = float(dyffusion_weight)
         self.endpoint_ae_weight = float(endpoint_ae_weight)
+        self.horizon_pred_weight = float(horizon_pred_weight)
 
         self.horizon = int(self.prediction_length)
         self.num_diffusion_steps = int(num_diffusion_steps or self.horizon)
@@ -244,6 +246,25 @@ class DyffusionTemporalAE(Forecaster):
 
         return loss.mean()
 
+    def _decode_forecast_trajectory(self, z_t, z_th_pred, device):
+        z_th_pred_k = self._unflatten_latent(z_th_pred)
+        x_th_pred = self._decode_point(z_th_pred_k)
+
+        if self.horizon == 1:
+            return x_th_pred.unsqueeze(1), x_th_pred
+
+        j_idx = torch.arange(1, self.horizon, device=device).float()
+        j_rep = j_idx.unsqueeze(0).repeat(z_t.shape[0], 1).reshape(-1)
+        z_t_rep = z_t.repeat_interleave(self.horizon - 1, dim=0)
+        z_th_rep = z_th_pred.repeat_interleave(self.horizon - 1, dim=0)
+        z_tj = self._interpolate(z_t_rep, z_th_rep, j_rep).view(
+            z_t.shape[0], self.horizon - 1, self.latent_dim
+        )
+        z_tj_k = z_tj.view(-1, self.target_dim, self.latent_dim_per_var)
+        x_tj = self._decode_point(z_tj_k).view(z_t.shape[0], self.horizon - 1, self.target_dim)
+        forecasts = torch.cat([x_tj, x_th_pred.unsqueeze(1)], dim=1)
+        return forecasts, x_th_pred
+
     def loss(self, batch_data):
         past_window = batch_data.past_target_cdf[:, -self.encoder_context_length :, :]
         x_th_true = batch_data.future_target_cdf[:, -1, :]
@@ -266,11 +287,12 @@ class DyffusionTemporalAE(Forecaster):
         # Supervise endpoint prediction at i=h-1 to match inference target x_{t+h}.
         i_h = torch.full((z_t.shape[0],), float(self.horizon - 1), device=z_t.device)
         z_th_pred = self._forecast(z_t, i_h, z_t=z_t)
-        z_th_pred_k = self._unflatten_latent(z_th_pred)
-        x_th_pred = self._decode_point(z_th_pred_k)
+        horizon_pred, x_th_pred = self._decode_forecast_trajectory(z_t, z_th_pred, z_t.device)
+        future_true = batch_data.future_target_cdf[:, : self.horizon, :]
 
         pred_loss = F.mse_loss(x_th_pred, x_th_true)
         latent_align_loss = F.mse_loss(z_th_pred, z_th_true)
+        horizon_pred_loss = F.mse_loss(horizon_pred, future_true)
 
         total_loss = (
             self.ae_recon_weight * recon_loss
@@ -278,6 +300,7 @@ class DyffusionTemporalAE(Forecaster):
             + self.dyffusion_weight * dyffusion_loss
             + self.ae_pred_weight * pred_loss
             + self.latent_align_weight * latent_align_loss
+            + self.horizon_pred_weight * horizon_pred_loss
         )
         return total_loss
 
@@ -312,22 +335,7 @@ class DyffusionTemporalAE(Forecaster):
             interp_curr = self._interpolate(z_t, z_th_pred, i_n)
             s_n = interp_next - interp_curr + s_n
 
-        z_th_pred_k = self._unflatten_latent(z_th_pred)
-        x_th_pred = self._decode_point(z_th_pred_k)
-
-        if self.horizon == 1:
-            forecasts = x_th_pred.unsqueeze(1)
-        else:
-            j_idx = torch.arange(1, self.horizon, device=device).float()
-            j_rep = j_idx.unsqueeze(0).repeat(z_t.shape[0], 1).reshape(-1)
-            z_t_rep = z_t.repeat_interleave(self.horizon - 1, dim=0)
-            z_th_rep = z_th_pred.repeat_interleave(self.horizon - 1, dim=0)
-            z_tj = self._interpolate(z_t_rep, z_th_rep, j_rep).view(
-                z_t.shape[0], self.horizon - 1, self.latent_dim
-            )
-            z_tj_k = z_tj.view(-1, self.target_dim, self.latent_dim_per_var)
-            x_tj = self._decode_point(z_tj_k).view(z_t.shape[0], self.horizon - 1, self.target_dim)
-            forecasts = torch.cat([x_tj, x_th_pred.unsqueeze(1)], dim=1)
+        forecasts, _ = self._decode_forecast_trajectory(z_t, z_th_pred, device)
 
         forecasts = forecasts.view(-1, num_samples, self.horizon, self.target_dim)
         return forecasts

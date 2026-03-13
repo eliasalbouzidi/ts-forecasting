@@ -35,6 +35,7 @@ model:
       dyffusion_weight: 1.0
       ae_pred_weight: 1.0
       latent_align_weight: 1.0
+      horizon_pred_weight: 1.0
 
       use_lags: false
       use_feat_idx_emb: false
