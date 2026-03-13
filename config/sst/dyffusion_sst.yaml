@@ -53,6 +53,6 @@ data:
       prediction_length: 7        # forecast 1-7 days ahead
       train_ratio: 0.9549
       test_ratio: 0.0225
-  batch_size: 8                  # smaller batch for large target_dim (3600)
-  test_batch_size: 4
+  batch_size: 16                  # smaller batch for large target_dim (3600)
+  test_batch_size: 8
   num_workers: 1
