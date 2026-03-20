@@ -67,6 +67,7 @@ class ProbTSCli(LightningCLI):
         config_args = self.parser.parse_args()
         self.wandb_run_name = config_args.wandb_run_name
         self.run_config_paths = self._extract_run_config_paths(config_args)
+        self._print_run_config_files()
         
         dl_suffix = "_dl" if getattr(self.datamodule.data_manager, "scaler_fit_on_full_data", False) else ""
         backbone_tag = self._get_backbone_tag()
@@ -287,6 +288,22 @@ class ProbTSCli(LightningCLI):
 
         if saved:
             log.info("Saved %d run config file(s) to W&B run files.", saved)
+
+    def _print_run_config_files(self):
+        config_paths = getattr(self, "run_config_paths", [])
+        if not config_paths:
+            log.warning("No run config path detected; skipped config-file printout.")
+            return
+
+        for path in config_paths:
+            try:
+                content = path.read_text(encoding="utf-8")
+            except Exception as exc:
+                log.warning("Failed to read run config file '%s': %s", path, exc)
+                continue
+
+            log.info("Using config file: %s", path)
+            print(f"\n===== CONFIG FILE: {path} =====\n{content}\n===== END CONFIG FILE =====\n")
     
     def set_test_mode(self):
         csv_logger = CSVLogger(
