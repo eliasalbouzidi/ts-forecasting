@@ -165,7 +165,7 @@ outputs/
 lightning_logs/
 
 tensorboard/
-config/
+config/default
 
 
 # --- Testing & Coverage ---
