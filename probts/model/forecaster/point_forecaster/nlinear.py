@@ -17,6 +17,7 @@ class NLinear(Forecaster):
     def __init__(
         self,
         individual: bool,
+        loss_type: str = "l2",
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -35,7 +36,12 @@ class NLinear(Forecaster):
                 self.Linear.append(nn.Linear(self.context_length,self.prediction_length))
         else:
             self.Linear = nn.Linear(self.context_length, self.prediction_length)
-        self.loss_fn = nn.MSELoss(reduction='none')
+        if loss_type == "l1":
+            self.loss_fn = nn.L1Loss(reduction='none')
+        elif loss_type == "l2":
+            self.loss_fn = nn.MSELoss(reduction='none')
+        else:
+            raise ValueError(f"Unsupported loss_type: {loss_type}")
 
     def forward(self, inputs):
         seq_last = inputs[:,-1:,:].detach()

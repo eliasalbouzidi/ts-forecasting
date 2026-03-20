@@ -29,6 +29,7 @@ class iTransformer(Forecaster):
         class_strategy:str = 'projection',
         dropout: float = 0.1,
         f_hidden_size: int = 512,
+        loss_type: str = "l2",
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -56,7 +57,12 @@ class iTransformer(Forecaster):
             norm_layer=torch.nn.LayerNorm(f_hidden_size)
         )
         self.projector = nn.Linear(f_hidden_size, self.prediction_length, bias=True)
-        self.loss_fn = nn.MSELoss(reduction='none')
+        if loss_type == "l1":
+            self.loss_fn = nn.L1Loss(reduction='none')
+        elif loss_type == "l2":
+            self.loss_fn = nn.MSELoss(reduction='none')
+        else:
+            raise ValueError(f"Unsupported loss_type: {loss_type}")
 
     def forward(self, inputs):
         if self.use_time_feat:
