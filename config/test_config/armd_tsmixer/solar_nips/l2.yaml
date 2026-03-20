@@ -1,0 +1,63 @@
+# lightning==2.3.0.dev0
+seed_everything: 1
+# checkpoint selection metric; options include val_loss, val_CRPS, val_weighted_ND, norm_CRPS, etc.
+monitor_metric: val_norm_MAE
+wandb_run_name: armd_tsmixer_solar_l2
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 1
+  max_steps: 3000
+  use_distributed_sampler: false
+  limit_train_batches: 3000
+  val_check_interval: 0.25
+  log_every_n_steps: 1
+  default_root_dir: ./results
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.ARMD
+    init_args:
+      # --- ARMD Specific Parameters ---
+      loss_type: l2
+      beta_schedule: linear
+      sampling_timesteps: 12
+      w_grad: true
+
+      # Hyperparameters for Eq (5)
+      b_param: 2.0
+      c_param: -1.0
+      d_param: 0.5
+
+      # --- Backbone ---
+      backbone_type: tsmixer
+      tsmixer_n_blocks: 2
+      tsmixer_hidden_dim: 128
+      tsmixer_dropout: 0.1
+      tsmixer_temporal_mlp_ratio: 2.0
+      tsmixer_channel_mlp_ratio: 2.0
+      tsmixer_activation: gelu
+
+      # --- General Model Args ---
+      use_scaling: false
+      use_lags: false
+      use_feat_idx_emb: false
+      use_time_feat: false
+
+  learning_rate: 0.001
+  quantiles_num: 20
+  wandb_report_metrics: ["loss", "MSE", "MAE", "sMAPE", "CRPS", "DTW"]
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: solar_nips
+      scaler: standard
+      scaler_fit_on_full_data: false
+      split_val: true
+      context_length: 96
+      prediction_length: 96
+
+  batch_size: 128
+  test_batch_size: 64
+  num_workers: 1

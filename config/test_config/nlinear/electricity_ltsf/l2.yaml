@@ -1,12 +1,16 @@
 # lightning==2.3.0.dev0
 seed_everything: 1
+monitor_metric: val_norm_MAE
+wandb_run_name: nlinear_electricity_ltsf_l2
 trainer:
   accelerator: gpu
   devices: 1
   strategy: auto
-  max_epochs: 50
+  max_epochs: 1
+  max_steps: 3000
   use_distributed_sampler: false
-  limit_train_batches: 100
+  limit_train_batches: 3000
+  val_check_interval: 0.25
   log_every_n_steps: 1
   default_root_dir: ./results
 model:
@@ -20,13 +24,17 @@ model:
       use_time_feat: false
   learning_rate: 0.01
   quantiles_num: 20
+  wandb_report_metrics: ["loss", "MSE", "MAE", "sMAPE", "CRPS", "DTW"]
 data:
   data_manager:
     class_path: probts.data.data_manager.DataManager
     init_args:
-      dataset: solar_nips
+      dataset: electricity_ltsf
+      scaler: standard
+      scaler_fit_on_full_data: false
       split_val: true
-      scaler: standard # identity, standard, temporal
+      context_length: 96
+      prediction_length: 96
   batch_size: 64
   test_batch_size: 64
-  num_workers: 8
+  num_workers: 1

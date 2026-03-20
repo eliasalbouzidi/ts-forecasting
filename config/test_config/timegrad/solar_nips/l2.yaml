@@ -1,0 +1,50 @@
+# lightning==2.3.0.dev0
+seed_everything: 1
+monitor_metric: val_norm_MAE
+wandb_run_name: timegrad_solar_nips_l2
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 1
+  max_steps: 5000
+  use_distributed_sampler: false
+  limit_train_batches: 5000
+  val_check_interval: 0.25
+  log_every_n_steps: 1
+  default_root_dir: ./results
+model:
+  forecaster:
+    class_path: probts.model.forecaster.prob_forecaster.TimeGrad
+    init_args:
+      loss_type: l2
+      diff_steps: 100
+      beta_end: 0.1
+      beta_schedule: linear
+      conditional_length: 100
+      enc_hidden_size: 128
+      enc_num_layers: 4
+      enc_dropout: 0.1
+      use_lags: true
+      use_feat_idx_emb: true
+      use_time_feat: true
+      feat_idx_emb_dim: 1
+      use_scaling: true
+
+  learning_rate: 0.001
+  quantiles_num: 20
+  wandb_report_metrics: ["loss", "MSE", "MAE", "sMAPE", "CRPS", "DTW"]
+data:
+  data_manager:
+    class_path: probts.data.data_manager.DataManager
+    init_args:
+      dataset: solar_nips
+      scaler: standard
+      scaler_fit_on_full_data: false
+      split_val: true
+      context_length: 96
+      prediction_length: 96
+
+  batch_size: 64
+  test_batch_size: 64
+  num_workers: 1
